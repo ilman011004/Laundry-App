@@ -2,6 +2,7 @@ const { z } = require('zod');
 const prisma = require('../lib/prisma');
 const { AppError } = require('../middleware/errorHandler');
 const { calculate } = require('../services/pricing.service');
+const { TZ_OFFSET_HOURS } = require('../utils/time');
 
 const idParam = z.object({ id: z.coerce.number().int().positive() });
 
@@ -34,9 +35,25 @@ const listQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
 
-// Nomor order: LDR-YYMMDD-0001 (urut per hari, zona waktu Asia/Makassar = UTC+8)
+// Relasi yang ikut dimuat pada detail dan hasil pembuatan pesanan
+const orderInclude = {
+  customer: { select: { id: true, name: true, phone: true } },
+  createdBy: { select: { id: true, name: true } },
+  items: { include: { addons: true }, orderBy: { id: 'asc' } },
+  history: {
+    orderBy: { id: 'asc' },
+    include: { changedBy: { select: { id: true, name: true } } },
+  },
+  payments: { orderBy: { id: 'asc' } },
+  deliveries: {
+    orderBy: { id: 'asc' },
+    include: { courier: { select: { id: true, name: true } } },
+  },
+};
+
+// Nomor order: LDR-YYMMDD-0001 (urut per hari, mengikuti zona waktu di utils/time.js)
 async function generateOrderNumber(tx) {
-  const now = new Date(Date.now() + 8 * 3600 * 1000);
+  const now = new Date(Date.now() + TZ_OFFSET_HOURS * 3600 * 1000);
   const yy = String(now.getUTCFullYear()).slice(2);
   const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
   const dd = String(now.getUTCDate()).padStart(2, '0');
@@ -137,17 +154,6 @@ async function create(req, res) {
 
   res.status(201).json({ data: order });
 }
-
-const orderInclude = {
-  customer: { select: { id: true, name: true, phone: true } },
-  createdBy: { select: { id: true, name: true } },
-  items: { include: { addons: true }, orderBy: { id: 'asc' } },
-  history: {
-    orderBy: { id: 'asc' },
-    include: { changedBy: { select: { id: true, name: true } } },
-  },
-  payments: { orderBy: { id: 'asc' } },
-};
 
 // ---------- Daftar ----------
 async function list(req, res) {
