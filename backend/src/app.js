@@ -40,6 +40,7 @@ app.use('/api/services', require('./routes/services.routes'));
 app.use('/api/options', require('./routes/options.routes'));
 app.use('/api/catalog', require('./routes/catalog.routes'));
 app.use('/api/orders', require('./routes/orders.routes'));
+app.use('/api/reports', require('./routes/reports.routes'));
 
 app.use(notFound);
 app.use(errorHandler);
