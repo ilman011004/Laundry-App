@@ -35,6 +35,8 @@ app.get('/health', async (req, res) => {
 
 app.use('/api/auth', require('./routes/auth.routes'));
 app.use('/api/users', require('./routes/users.routes'));
+app.use('/api/customers', require('./routes/customers.routes'));
+
 
 app.use(notFound);
 app.use(errorHandler);
