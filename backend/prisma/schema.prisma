@@ -1,0 +1,314 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ======================= ENUM =======================
+
+enum PricingType {
+  PER_KG
+  PER_ITEM
+  PACKAGE
+}
+
+enum OptionType {
+  SPEED
+  ADDON
+  FULFILLMENT
+}
+
+enum PriceMode {
+  FIXED
+  PERCENT
+}
+
+enum ReceiveMethod {
+  SELF_PICKUP
+  DELIVERY
+  PICKUP_DELIVERY
+}
+
+enum WorkStatus {
+  RECEIVED
+  WASHING
+  DRYING
+  IRONING
+  READY
+  COMPLETED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  UNPAID
+  PARTIAL
+  PAID
+}
+
+enum PaymentMethod {
+  CASH
+  TRANSFER
+  QRIS
+}
+
+enum DeliveryType {
+  PICKUP
+  DROPOFF
+}
+
+enum DeliveryStatus {
+  SCHEDULED
+  ON_THE_WAY
+  DONE
+  CANCELLED
+}
+
+// ======================= AKUN =======================
+
+model Role {
+  id    Int    @id @default(autoincrement())
+  name  String @unique
+  users User[]
+
+  @@map("roles")
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  name         String
+  username     String   @unique
+  passwordHash String   @map("password_hash")
+  roleId       Int      @map("role_id")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  role          Role                 @relation(fields: [roleId], references: [id])
+  orders        Order[]
+  statusChanges OrderStatusHistory[]
+  payments      Payment[]
+  expenses      Expense[]
+  deliveries    Delivery[]
+
+  @@map("users")
+}
+
+// ======================= PELANGGAN =======================
+
+model Customer {
+  id        Int      @id @default(autoincrement())
+  name      String
+  phone     String   @unique
+  notes     String?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  addresses CustomerAddress[]
+  orders    Order[]
+
+  @@map("customers")
+}
+
+model CustomerAddress {
+  id         Int      @id @default(autoincrement())
+  customerId Int      @map("customer_id")
+  label      String
+  address    String
+  notes      String?
+  isDefault  Boolean  @default(false) @map("is_default")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@map("customer_addresses")
+}
+
+// ======================= LAYANAN (DINAMIS) =======================
+
+model Service {
+  id          Int         @id @default(autoincrement())
+  name        String      @unique
+  pricingType PricingType @map("pricing_type")
+  price       Int
+  isActive    Boolean     @default(true) @map("is_active")
+  sortOrder   Int         @default(0) @map("sort_order")
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  orderItems OrderItem[]
+
+  @@map("services")
+}
+
+model ServiceOption {
+  id            Int        @id @default(autoincrement())
+  type          OptionType
+  name          String
+  priceMode     PriceMode  @default(FIXED) @map("price_mode")
+  price         Int        @default(0)
+  durationHours Int?       @map("duration_hours")
+  isActive      Boolean    @default(true) @map("is_active")
+  sortOrder     Int        @default(0) @map("sort_order")
+  createdAt     DateTime   @default(now()) @map("created_at")
+  updatedAt     DateTime   @updatedAt @map("updated_at")
+
+  @@unique([type, name])
+  @@map("service_options")
+}
+
+// ======================= PESANAN =======================
+
+model Order {
+  id          Int    @id @default(autoincrement())
+  orderNumber String @unique @map("order_number")
+  customerId  Int    @map("customer_id")
+  createdById Int    @map("created_by_id")
+
+  receiveMethod ReceiveMethod @map("receive_method")
+  workStatus    WorkStatus    @default(RECEIVED) @map("work_status")
+  paymentStatus PaymentStatus @default(UNPAID) @map("payment_status")
+
+  speedName  String? @map("speed_name")
+  speedFee   Int     @default(0) @map("speed_fee")
+  speedHours Int?    @map("speed_hours")
+
+  fulfillmentName String? @map("fulfillment_name")
+  deliveryFee     Int     @default(0) @map("delivery_fee")
+
+  subtotal   Int @default(0)
+  discount   Int @default(0)
+  total      Int @default(0)
+  paidAmount Int @default(0) @map("paid_amount")
+
+  notes           String?
+  receivedAt      DateTime  @default(now()) @map("received_at")
+  estimatedDoneAt DateTime? @map("estimated_done_at")
+  completedAt     DateTime? @map("completed_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  customer   Customer             @relation(fields: [customerId], references: [id])
+  createdBy  User                 @relation(fields: [createdById], references: [id])
+  items      OrderItem[]
+  history    OrderStatusHistory[]
+  payments   Payment[]
+  deliveries Delivery[]
+
+  @@index([customerId])
+  @@index([workStatus])
+  @@index([paymentStatus])
+  @@index([createdAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id        Int  @id @default(autoincrement())
+  orderId   Int  @map("order_id")
+  serviceId Int? @map("service_id")
+
+  serviceName String      @map("service_name")
+  pricingType PricingType @map("pricing_type")
+  unitPrice   Int         @map("unit_price")
+
+  quantity  Decimal @db.Decimal(10, 2)
+  lineTotal Int     @map("line_total")
+  notes     String?
+
+  order   Order            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  service Service?         @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  addons  OrderItemAddon[]
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+model OrderItemAddon {
+  id          Int       @id @default(autoincrement())
+  orderItemId Int       @map("order_item_id")
+  optionId    Int?      @map("option_id")
+
+  name      String
+  priceMode PriceMode @map("price_mode")
+  price     Int
+  amount    Int
+
+  orderItem OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+
+  @@index([orderItemId])
+  @@map("order_item_addons")
+}
+
+model OrderStatusHistory {
+  id          Int         @id @default(autoincrement())
+  orderId     Int         @map("order_id")
+  fromStatus  WorkStatus? @map("from_status")
+  toStatus    WorkStatus  @map("to_status")
+  changedById Int         @map("changed_by_id")
+  note        String?
+  createdAt   DateTime    @default(now()) @map("created_at")
+
+  order     Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  changedBy User  @relation(fields: [changedById], references: [id])
+
+  @@index([orderId])
+  @@map("order_status_history")
+}
+
+// ======================= PEMBAYARAN & PENGANTARAN =======================
+
+model Payment {
+  id           Int           @id @default(autoincrement())
+  orderId      Int           @map("order_id")
+  amount       Int
+  method       PaymentMethod
+  note         String?
+  receivedById Int           @map("received_by_id")
+  paidAt       DateTime      @default(now()) @map("paid_at")
+
+  order      Order @relation(fields: [orderId], references: [id])
+  receivedBy User  @relation(fields: [receivedById], references: [id])
+
+  @@index([orderId])
+  @@index([paidAt])
+  @@map("payments")
+}
+
+model Delivery {
+  id              Int            @id @default(autoincrement())
+  orderId         Int            @map("order_id")
+  type            DeliveryType
+  status          DeliveryStatus @default(SCHEDULED)
+  addressSnapshot String?        @map("address_snapshot")
+  scheduledAt     DateTime?      @map("scheduled_at")
+  courierId       Int?           @map("courier_id")
+  notes           String?
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+
+  order   Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  courier User? @relation(fields: [courierId], references: [id])
+
+  @@index([orderId])
+  @@map("deliveries")
+}
+
+// ======================= PENGELUARAN =======================
+
+model Expense {
+  id          Int      @id @default(autoincrement())
+  category    String
+  description String?
+  amount      Int
+  spentAt     DateTime @default(now()) @map("spent_at")
+  createdById Int      @map("created_by_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  createdBy User @relation(fields: [createdById], references: [id])
+
+  @@index([spentAt])
+  @@map("expenses")
+}
