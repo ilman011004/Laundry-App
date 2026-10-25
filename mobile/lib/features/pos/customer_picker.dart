@@ -66,6 +66,14 @@ class _CustomerPickerState extends ConsumerState<_CustomerPicker> {
     }
   }
 
+  Future<void> _createNew() async {
+    final created = await showDialog<Customer>(
+      context: context,
+      builder: (_) => _NewCustomerDialog(initialQuery: _search.text),
+    );
+    if (created != null && mounted) Navigator.pop(context, created);
+  }
+
   @override
   Widget build(BuildContext context) {
     final height = MediaQuery.of(context).size.height * 0.75;
@@ -77,17 +85,29 @@ class _CustomerPickerState extends ConsumerState<_CustomerPicker> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: TextField(
-                controller: _search,
-                autofocus: true,
-                onChanged: (_) {
-                  _debounce?.cancel();
-                  _debounce = Timer(const Duration(milliseconds: 400), _load);
-                },
-                decoration: const InputDecoration(
-                  hintText: 'Cari nama atau nomor HP',
-                  prefixIcon: Icon(Icons.search),
-                ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _search,
+                      autofocus: true,
+                      onChanged: (_) {
+                        _debounce?.cancel();
+                        _debounce = Timer(const Duration(milliseconds: 400), _load);
+                      },
+                      decoration: const InputDecoration(
+                        hintText: 'Cari nama atau nomor HP',
+                        prefixIcon: Icon(Icons.search),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton.filledTonal(
+                    tooltip: 'Pelanggan baru',
+                    icon: const Icon(Icons.person_add),
+                    onPressed: _createNew,
+                  ),
+                ],
               ),
             ),
             Expanded(child: _body()),
@@ -112,12 +132,20 @@ class _CustomerPickerState extends ConsumerState<_CustomerPicker> {
       );
     }
     if (_items.isEmpty) {
-      return const Center(
+      return Center(
         child: Padding(
-          padding: EdgeInsets.all(24),
-          child: Text(
-            'Pelanggan tidak ditemukan.\nTambahkan dulu di tab Pelanggan.',
-            textAlign: TextAlign.center,
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Pelanggan tidak ditemukan.', textAlign: TextAlign.center),
+              const SizedBox(height: 12),
+              FilledButton.icon(
+                onPressed: _createNew,
+                icon: const Icon(Icons.person_add),
+                label: const Text('Pelanggan baru'),
+              ),
+            ],
           ),
         ),
       );
@@ -136,6 +164,115 @@ class _CustomerPickerState extends ConsumerState<_CustomerPicker> {
           onTap: () => Navigator.pop(context, c),
         );
       },
+    );
+  }
+}
+
+class _NewCustomerDialog extends ConsumerStatefulWidget {
+  const _NewCustomerDialog({required this.initialQuery});
+
+  final String initialQuery;
+
+  @override
+  ConsumerState<_NewCustomerDialog> createState() => _NewCustomerDialogState();
+}
+
+class _NewCustomerDialogState extends ConsumerState<_NewCustomerDialog> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _name;
+  late final TextEditingController _phone;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    // Jika yang diketik di pencarian berupa angka, anggap itu nomor HP.
+    final q = widget.initialQuery.trim();
+    final isPhone = RegExp(r'^[0-9+\-\s]+$').hasMatch(q);
+    _name = TextEditingController(text: isPhone ? '' : q);
+    _phone = TextEditingController(text: isPhone ? q : '');
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _phone.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_saving || !_formKey.currentState!.validate()) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final c = await ref
+          .read(customersRepositoryProvider)
+          .create(name: _name.text, phone: _phone.text);
+      if (mounted) Navigator.pop(context, c);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _error = errorMessage(e);
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Pelanggan baru'),
+      content: SingleChildScrollView(
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                controller: _name,
+                enabled: !_saving,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(labelText: 'Nama'),
+                validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? 'Nama wajib diisi' : null,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _phone,
+                enabled: !_saving,
+                keyboardType: TextInputType.phone,
+                decoration: const InputDecoration(labelText: 'Nomor HP'),
+                validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? 'Nomor HP wajib diisi' : null,
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 12),
+                Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context),
+          child: const Text('Batal'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _save,
+          child: _saving
+              ? const SizedBox(
+                  height: 18,
+                  width: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Simpan'),
+        ),
+      ],
     );
   }
 }

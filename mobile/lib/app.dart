@@ -9,9 +9,10 @@ import 'features/customers/customer_detail_page.dart';
 import 'features/customers/customer_form_page.dart';
 import 'features/customers/customers_list_page.dart';
 import 'features/home/home_page.dart';
+import 'features/orders/order_detail_page.dart';
+import 'features/orders/orders_list_page.dart';
 import 'features/pos/pos_page.dart';
 import 'features/shell/main_shell.dart';
-import 'features/shell/orders_placeholder_page.dart';
 
 final _rootKey = GlobalKey<NavigatorState>();
 
@@ -53,7 +54,15 @@ final routerProvider = Provider<GoRouter>((ref) {
           StatefulShellBranch(routes: [
             GoRoute(
               path: '/orders',
-              builder: (context, state) => const OrdersPlaceholderPage(),
+              builder: (context, state) => const OrdersListPage(),
+              routes: [
+                GoRoute(
+                  path: ':id',
+                  builder: (context, state) => OrderDetailPage(
+                    orderId: int.parse(state.pathParameters['id']!),
+                  ),
+                ),
+              ],
             ),
           ]),
           StatefulShellBranch(routes: [
