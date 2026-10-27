@@ -1,13 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 import '../../core/api_error.dart';
 import '../../core/format.dart';
 import '../../core/labels.dart';
 import '../auth/auth_controller.dart';
 import '../cash/cash_repository.dart';
+import '../deliveries/deliveries_day_page.dart';
+import '../deliveries/delivery_day_repository.dart';
 import '../settings/business_repository.dart';
 import 'dashboard_repository.dart';
+import '../orders/orders_preset.dart';
 
 String _lateText(DateTime? est) {
   if (est == null) return '';
@@ -17,6 +21,16 @@ String _lateText(DateTime? est) {
   return 'telat ${m ~/ (24 * 60)} hari';
 }
 
+/// Tanggal usaha hari ini, format "YYYY-MM-DD".
+String _todayKey() =>
+    DateFormat('yyyy-MM-dd').format(toBusinessTime(DateTime.now()));
+
+/// Buka tab Pesanan dengan filter yang sesuai kartu yang diketuk.
+void _openOrders(BuildContext context, WidgetRef ref, String view) {
+  ref.read(ordersPresetProvider.notifier).open(view);
+  context.go('/orders');
+}
+
 class HomePage extends ConsumerWidget {
   const HomePage({super.key});
 
@@ -24,7 +38,8 @@ class HomePage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final user = ref.watch(authControllerProvider).user;
     final async = ref.watch(dashboardProvider);
-    final bizName = ref.watch(businessProvider).asData?.value.name ?? 'Laundry';
+    final bizName =
+        ref.watch(businessProvider).asData?.value.name ?? 'Laundry';
     final theme = Theme.of(context);
 
     return Scaffold(
@@ -33,10 +48,16 @@ class HomePage extends ConsumerWidget {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(bizName,
-                style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
-            Text('${user?.name ?? '-'} • ${labelOf(roleLabel, user?.role)}',
-                style: theme.textTheme.bodySmall),
+            Text(
+              bizName,
+              style: theme.textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            Text(
+              '${user?.name ?? '-'} • ${labelOf(roleLabel, user?.role)}',
+              style: theme.textTheme.bodySmall,
+            ),
           ],
         ),
         actions: [
@@ -68,6 +89,7 @@ class HomePage extends ConsumerWidget {
         data: (d) => RefreshIndicator(
           onRefresh: () async {
             ref.invalidate(businessProvider);
+            ref.invalidate(deliveriesByDayProvider(_todayKey()));
             ref.invalidate(dashboardProvider);
             await ref.read(dashboardProvider.future);
           },
@@ -85,16 +107,20 @@ class HomePage extends ConsumerWidget {
                 _OverdueCard(d: d),
               ],
               const SizedBox(height: 20),
+              const _DeliveryCard(),
+              const SizedBox(height: 20),
+
               _Section('Ringkasan pesanan'),
               Row(
                 children: [
                   Expanded(
                     child: _Stat(
-                      label: 'Diproses',
+                      label: 'Sedang diproses',
                       value: '${d.inProgress}',
                       icon: Icons.local_laundry_service,
                       color: Colors.blue,
-                      onTap: () => context.go('/orders'),
+                      onTap: () =>
+                          _openOrders(context, ref, 'inProgress'),
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -104,7 +130,7 @@ class HomePage extends ConsumerWidget {
                       value: '${d.ready}',
                       icon: Icons.inventory_2_outlined,
                       color: Colors.green,
-                      onTap: () => context.go('/orders'),
+                      onTap: () => _openOrders(context, ref, 'ready'),
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -114,36 +140,39 @@ class HomePage extends ConsumerWidget {
                       value: '${d.completedToday}',
                       icon: Icons.check_circle_outline,
                       color: Colors.blueGrey,
-                      onTap: () => context.go('/orders'),
+                      onTap: () =>
+                          _openOrders(context, ref, 'completedToday'),
                     ),
                   ),
                 ],
               ),
               const SizedBox(height: 20),
+
               _Section('Pembayaran'),
               Row(
                 children: [
                   Expanded(
                     child: _Stat(
-                      label: 'Belum lunas',
-                      value: '${d.unpaidCount} pesanan',
+                      label: 'Pesanan belum lunas',
+                      value: '${d.unpaidCount}',
                       icon: Icons.hourglass_bottom,
                       color: Colors.orange,
-                      onTap: () => context.go('/orders'),
+                      onTap: () => _openOrders(context, ref, 'unpaid'),
                     ),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
                     child: _Stat(
-                      label: 'Total tagihan',
+                      label: 'Tagihan yang belum dibayar',
                       value: formatRupiah(d.outstanding),
                       icon: Icons.receipt_long,
                       color: Colors.red,
-                      onTap: () => context.go('/orders'),
+                      onTap: () => _openOrders(context, ref, 'unpaid'),
                     ),
                   ),
                 ],
               ),
+
               if (d.topDebts.isNotEmpty) ...[
                 const SizedBox(height: 10),
                 Card(
@@ -151,8 +180,12 @@ class HomePage extends ConsumerWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                        child: Text('Tagihan terbesar', style: theme.textTheme.titleSmall),
+                        padding:
+                            const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                        child: Text(
+                          'Tagihan terbesar',
+                          style: theme.textTheme.titleSmall,
+                        ),
                       ),
                       for (final t in d.topDebts)
                         ListTile(
@@ -166,12 +199,14 @@ class HomePage extends ConsumerWidget {
                               fontWeight: FontWeight.w600,
                             ),
                           ),
-                          onTap: () => context.push('/orders/${t.id}'),
+                          onTap: () =>
+                              context.push('/orders/${t.id}'),
                         ),
                     ],
                   ),
                 ),
               ],
+
               const SizedBox(height: 20),
               _Section('Hari ini'),
               Row(
@@ -237,16 +272,68 @@ class _Section extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.only(bottom: 10),
-        child: Text(text,
-            style: Theme.of(context)
-                .textTheme
-                .titleMedium
-                ?.copyWith(fontWeight: FontWeight.w700)),
+        child: Text(
+          text,
+          style: Theme.of(context)
+              .textTheme
+              .titleMedium
+              ?.copyWith(fontWeight: FontWeight.w700),
+        ),
       );
 }
 
+/// Kartu pintu masuk ke layar Jadwal antar-jemput, dengan jumlah tugas hari ini.
+class _DeliveryCard extends ConsumerWidget {
+  const _DeliveryCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final async = ref.watch(deliveriesByDayProvider(_todayKey()));
+
+    final subtitle = async.when(
+      loading: () => 'Memuat jadwal...',
+      error: (_, _) => 'Ketuk untuk melihat jadwal',
+      data: (list) {
+        final active =
+            list.where((t) => t.delivery.status != 'CANCELLED').toList();
+        if (active.isEmpty) return 'Tidak ada jadwal hari ini';
+        final pending =
+            active.where((t) => t.delivery.status != 'DONE').length;
+        return pending == 0
+            ? 'Semua ${active.length} tugas hari ini selesai'
+            : '$pending dari ${active.length} tugas belum selesai';
+      },
+    );
+
+    return Card(
+      child: ListTile(
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        leading: const CircleAvatar(
+          child: Icon(Icons.local_shipping_outlined),
+        ),
+        title: const Text(
+          'Jadwal antar-jemput',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+        subtitle: Text(subtitle),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => const DeliveriesDayPage(),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _CashHero extends StatelessWidget {
-  const _CashHero({required this.cash, required this.money, required this.onOpen});
+  const _CashHero({
+    required this.cash,
+    required this.money,
+    required this.onOpen,
+  });
 
   final CashSummary cash;
   final Money? money;
@@ -262,11 +349,22 @@ class _CashHero extends StatelessWidget {
           child: Row(
             children: [
               Expanded(
-                child: Text(label,
-                    style: TextStyle(color: text.withValues(alpha: 0.85), fontSize: 13)),
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    color: text.withValues(alpha: 0.85),
+                    fontSize: 13,
+                  ),
+                ),
               ),
-              Text(formatRupiah(value),
-                  style: TextStyle(color: text, fontSize: 13, fontWeight: FontWeight.w600)),
+              Text(
+                formatRupiah(value),
+                style: TextStyle(
+                  color: text,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ],
           ),
         );
@@ -280,7 +378,10 @@ class _CashHero extends StatelessWidget {
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [cs.primary, Color.lerp(cs.primary, Colors.black, 0.4)!],
+          colors: [
+            cs.primary,
+            Color.lerp(cs.primary, Colors.black, 0.4)!,
+          ],
         ),
       ),
       child: Material(
@@ -295,15 +396,25 @@ class _CashHero extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Icon(Icons.account_balance_wallet_outlined, color: text),
+                    Icon(
+                      Icons.account_balance_wallet_outlined,
+                      color: text,
+                    ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        isOwner ? 'Total kas usaha (tunai)' : 'Kas saya (tunai)',
-                        style: TextStyle(color: text.withValues(alpha: 0.9)),
+                        isOwner
+                            ? 'Total kas usaha (tunai)'
+                            : 'Kas saya (tunai)',
+                        style: TextStyle(
+                          color: text.withValues(alpha: 0.9),
+                        ),
                       ),
                     ),
-                    Icon(Icons.chevron_right, color: text),
+                    Icon(
+                      Icons.chevron_right,
+                      color: text,
+                    ),
                   ],
                 ),
                 const SizedBox(height: 8),
@@ -319,15 +430,23 @@ class _CashHero extends StatelessWidget {
                 if (isOwner) ...[
                   line('Di pemilik', cash.ownerCash),
                   line('Di tangan kasir', cash.cashierHeldTotal),
-                  line('Setoran belum diterima (${cash.pendingCount})', cash.pendingTotal),
+                  line(
+                    'Setoran belum diterima (${cash.pendingCount})',
+                    cash.pendingTotal,
+                  ),
                   if (money != null) ...[
-                    Divider(color: text.withValues(alpha: 0.3)),
+                    Divider(
+                      color: text.withValues(alpha: 0.3),
+                    ),
                     line('Transfer (di luar kas)', money!.transfer),
                     line('QRIS (di luar kas)', money!.qris),
                   ],
                 ] else ...[
                   if (cash.pendingDeposits > 0)
-                    line('Setoran menunggu pemilik', cash.pendingDeposits),
+                    line(
+                      'Setoran menunggu pemilik',
+                      cash.pendingDeposits,
+                    ),
                   const SizedBox(height: 8),
                   Align(
                     alignment: Alignment.centerLeft,
@@ -361,7 +480,10 @@ class _OverdueCard extends StatelessWidget {
       child: Column(
         children: [
           ListTile(
-            leading: Icon(Icons.warning_amber_rounded, color: cs.onErrorContainer),
+            leading: Icon(
+              Icons.warning_amber_rounded,
+              color: cs.onErrorContainer,
+            ),
             title: Text(
               '${d.overdue} pesanan melewati estimasi selesai',
               style: TextStyle(
@@ -369,30 +491,45 @@ class _OverdueCard extends StatelessWidget {
                 fontWeight: FontWeight.w700,
               ),
             ),
-            subtitle: Text('Segera diselesaikan',
-                style: TextStyle(color: cs.onErrorContainer)),
+            subtitle: Text(
+              'Segera diselesaikan',
+              style: TextStyle(
+                color: cs.onErrorContainer,
+              ),
+            ),
           ),
           for (final o in d.overdueList)
             ListTile(
               dense: true,
-              title: Text(o.customerName,
-                  style: TextStyle(
-                      color: cs.onErrorContainer, fontWeight: FontWeight.w600)),
+              title: Text(
+                o.customerName,
+                style: TextStyle(
+                  color: cs.onErrorContainer,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
               subtitle: Text(
                 '${o.orderNumber} • ${labelOf(workStatusLabel, o.workStatus)}',
-                style: TextStyle(color: cs.onErrorContainer),
+                style: TextStyle(
+                  color: cs.onErrorContainer,
+                ),
               ),
               trailing: Text(
                 _lateText(o.estimatedDoneAt),
                 style: TextStyle(
-                    color: cs.error, fontWeight: FontWeight.w700, fontSize: 12),
+                  color: cs.error,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                ),
               ),
               onTap: () => context.push('/orders/${o.id}'),
             ),
           if (d.overdue > d.overdueList.length)
             TextButton(
               onPressed: () => context.go('/orders'),
-              child: Text('Lihat ${d.overdue - d.overdueList.length} lainnya'),
+              child: Text(
+                'Lihat ${d.overdue - d.overdueList.length} lainnya',
+              ),
             ),
           const SizedBox(height: 4),
         ],
@@ -419,10 +556,13 @@ class _Stat extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+
     return Card(
       elevation: 0,
       color: color.withValues(alpha: 0.10),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+      ),
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
         onTap: onTap,
@@ -434,18 +574,28 @@ class _Stat extends StatelessWidget {
               CircleAvatar(
                 radius: 16,
                 backgroundColor: color.withValues(alpha: 0.18),
-                child: Icon(icon, color: color, size: 18),
+                child: Icon(
+                  icon,
+                  color: color,
+                  size: 18,
+                ),
               ),
               const SizedBox(height: 10),
               FittedBox(
                 fit: BoxFit.scaleDown,
                 alignment: Alignment.centerLeft,
-                child: Text(value,
-                    style: theme.textTheme.titleMedium
-                        ?.copyWith(fontWeight: FontWeight.w700)),
+                child: Text(
+                  value,
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
               ),
               const SizedBox(height: 2),
-              Text(label, style: theme.textTheme.bodySmall),
+              Text(
+                label,
+                style: theme.textTheme.bodySmall,
+              ),
             ],
           ),
         ),

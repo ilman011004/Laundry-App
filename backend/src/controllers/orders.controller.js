@@ -29,6 +29,7 @@ const listQuery = z.object({
     .optional(),
   paymentStatus: z.enum(['UNPAID', 'PARTIAL', 'PAID']).optional(),
   customerId: z.coerce.number().int().positive().optional(),
+  view: z.enum(['inProgress', 'ready', 'completedToday', 'unpaid']).optional(),
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
   page: z.coerce.number().int().min(1).default(1),
@@ -155,6 +156,29 @@ async function create(req, res) {
   res.status(201).json({ data: order });
 }
 
+// Awal hari ini menurut waktu usaha (Asia/Makassar, UTC+8)
+function startOfDayLocal() {
+  const H = 3600 * 1000;
+  const l = new Date(Date.now() + 8 * H);
+  return new Date(Date.UTC(l.getUTCFullYear(), l.getUTCMonth(), l.getUTCDate()) - 8 * H);
+}
+
+function viewCondition(view) {
+  switch (view) {
+    case 'inProgress':
+      return { workStatus: { in: ['RECEIVED', 'WASHING', 'DRYING', 'IRONING'] } };
+    case 'ready':
+      return { workStatus: 'READY' };
+    case 'completedToday':
+      return { workStatus: 'COMPLETED', completedAt: { gte: startOfDayLocal() } };
+    case 'unpaid':
+      return { workStatus: { not: 'CANCELLED' }, paymentStatus: { not: 'PAID' } };
+    default:
+      return null;
+  }
+}
+
+
 // ---------- Daftar ----------
 async function list(req, res) {
   const q = listQuery.parse(req.query);
@@ -168,6 +192,8 @@ async function list(req, res) {
     if (q.from) where.createdAt.gte = q.from;
     if (q.to) where.createdAt.lte = q.to;
   }
+  const vc = viewCondition(q.view);
+  if (vc) where.AND = [vc];
   if (q.search) {
     where.OR = [
       { orderNumber: { contains: q.search, mode: 'insensitive' } },

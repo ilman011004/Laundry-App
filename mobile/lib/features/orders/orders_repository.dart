@@ -12,6 +12,7 @@ class OrdersRepository {
     String? search,
     String? workStatus,
     String? paymentStatus,
+    String? view,
     int page = 1,
     int limit = 20,
   }) async {
@@ -19,10 +20,13 @@ class OrdersRepository {
       if (search != null && search.trim().isNotEmpty) 'search': search.trim(),
       'workStatus': ?workStatus,
       'paymentStatus': ?paymentStatus,
+      'view': ?view,
       'page': page,
       'limit': limit,
     });
+
     final meta = res.data['meta'] as Map<String, dynamic>;
+
     return OrderPage(
       items: (res.data['data'] as List)
           .map((e) => OrderSummary.fromJson(e as Map<String, dynamic>))
@@ -34,11 +38,17 @@ class OrdersRepository {
 
   Future<OrderDetail> detail(int id) async {
     final res = await _dio.get('/api/orders/$id');
-    return OrderDetail.fromJson(res.data['data'] as Map<String, dynamic>);
+    return OrderDetail.fromJson(
+      res.data['data'] as Map<String, dynamic>,
+    );
   }
 
-  Future<void> pay(int id,
-      {required int amount, required String method, String? note}) async {
+  Future<void> pay(
+    int id, {
+    required int amount,
+    required String method,
+    String? note,
+  }) async {
     await _dio.post('/api/orders/$id/payments', data: {
       'amount': amount,
       'method': method,
@@ -46,22 +56,35 @@ class OrdersRepository {
     });
   }
 
-  /// Mengembalikan peringatan dari backend (mis. diserahkan dengan sisa tagihan), jika ada.
-  Future<String?> updateStatus(int id, {required String status, String? note}) async {
+  /// Mengembalikan peringatan dari backend
+  /// (mis. diserahkan dengan sisa tagihan), jika ada.
+  Future<String?> updateStatus(
+    int id, {
+    required String status,
+    String? note,
+  }) async {
     final res = await _dio.patch('/api/orders/$id/status', data: {
       'status': status,
       if (note != null && note.trim().isNotEmpty) 'note': note.trim(),
     });
+
     return (res.data['data'] as Map<String, dynamic>)['warning'] as String?;
   }
 
-  Future<void> cancel(int id, {required String note}) async {
-    await _dio.post('/api/orders/$id/cancel', data: {'note': note.trim()});
+  Future<void> cancel(
+    int id, {
+    required String note,
+  }) async {
+    await _dio.post(
+      '/api/orders/$id/cancel',
+      data: {'note': note.trim()},
+    );
   }
 }
 
-final ordersRepositoryProvider =
-    Provider<OrdersRepository>((ref) => OrdersRepository(ref.watch(dioProvider)));
+final ordersRepositoryProvider = Provider<OrdersRepository>(
+  (ref) => OrdersRepository(ref.watch(dioProvider)),
+);
 
 final orderDetailProvider =
     FutureProvider.autoDispose.family<OrderDetail, int>((ref, id) {

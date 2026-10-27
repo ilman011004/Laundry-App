@@ -6,6 +6,7 @@ import '../../core/api_error.dart';
 import '../../core/format.dart';
 import '../../core/labels.dart';
 import 'order_models.dart';
+import 'orders_preset.dart';
 import 'orders_repository.dart';
 
 Color _workColor(String s) => switch (s) {
@@ -47,15 +48,19 @@ class _OrdersListPageState extends ConsumerState<OrdersListPage> {
 
   String? _workStatus;
   String? _paymentStatus;
+  String? _view; // pintasan dari Beranda
 
   bool get _hasFilter =>
       _workStatus != null ||
       _paymentStatus != null ||
+      _view != null ||
       _searchCtrl.text.trim().isNotEmpty;
 
   @override
   void initState() {
     super.initState();
+    // Jika tab ini baru dibuka dari kartu Beranda, langsung pakai filternya.
+    _view = ref.read(ordersPresetProvider).view;
     _scroll.addListener(() {
       if (_scroll.position.extentAfter < 300) _load();
     });
@@ -94,6 +99,7 @@ class _OrdersListPageState extends ConsumerState<OrdersListPage> {
             search: _searchCtrl.text,
             workStatus: _workStatus,
             paymentStatus: _paymentStatus,
+            view: _view,
             page: _page + 1,
           );
       if (!mounted || myRequest != _requestId) return;
@@ -134,6 +140,7 @@ class _OrdersListPageState extends ConsumerState<OrdersListPage> {
     _searchCtrl.clear();
     _workStatus = null;
     _paymentStatus = null;
+    _view = null;
     _reload();
   }
 
@@ -142,8 +149,15 @@ class _OrdersListPageState extends ConsumerState<OrdersListPage> {
     // Muat ulang otomatis saat ada pesanan baru dari tab Kasir.
     ref.listen(ordersRevisionProvider, (_, _) => _reload());
 
+    // Kartu di Beranda diketuk saat tab ini sudah terbuka sebelumnya.
+    ref.listen(ordersPresetProvider, (_, next) {
+      _view = next.view;
+      _reload();
+    });
+
     final filterCount =
         (_workStatus != null ? 1 : 0) + (_paymentStatus != null ? 1 : 0);
+    final showChips = _workStatus != null || _paymentStatus != null || _view != null;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Pesanan')),
@@ -190,13 +204,25 @@ class _OrdersListPageState extends ConsumerState<OrdersListPage> {
               ],
             ),
           ),
-          if (_workStatus != null || _paymentStatus != null)
+          if (showChips)
             SizedBox(
-              height: 40,
+              height: 44,
               child: ListView(
                 scrollDirection: Axis.horizontal,
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 children: [
+                  if (_view != null)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: InputChip(
+                        avatar: const Icon(Icons.filter_alt, size: 18),
+                        label: Text(ordersViewLabel[_view] ?? _view!),
+                        onDeleted: () {
+                          _view = null;
+                          _reload();
+                        },
+                      ),
+                    ),
                   if (_workStatus != null)
                     Padding(
                       padding: const EdgeInsets.only(right: 8),
