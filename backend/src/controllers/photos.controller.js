@@ -74,6 +74,9 @@ async function create(req, res) {
   });
   if (!order) throw new AppError('Pesanan tidak ditemukan', 404);
   if (order.workStatus === 'CANCELLED') throw new AppError('Pesanan sudah dibatalkan', 409);
+  if (kind === 'READY' && order.workStatus !== 'READY') {
+    throw new AppError('Foto siap diambil hanya bisa ditambahkan saat status pesanan Siap', 409);
+  }
 
   const count = await prisma.orderPhoto.count({ where: { orderId: id, kind } });
   if (count >= MAX_PER_KIND) {
