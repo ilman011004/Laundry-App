@@ -136,6 +136,7 @@ class OrderDetail {
     required this.receivedAt,
     this.speedName,
     this.fulfillmentName,
+    this.receiveMethod,
     this.notes,
     this.estimatedDoneAt,
     this.completedAt,
@@ -154,6 +155,7 @@ class OrderDetail {
   final String? speedName;
   final int speedFee;
   final String? fulfillmentName;
+  final String? receiveMethod;
   final int deliveryFee;
   final int discount;
   final int total;
@@ -213,6 +215,7 @@ class OrderDetail {
       speedName: j['speedName'] as String?,
       speedFee: j['speedFee'] as int,
       fulfillmentName: j['fulfillmentName'] as String?,
+      receiveMethod: j['receiveMethod'] as String?,
       deliveryFee: j['deliveryFee'] as int,
       discount: j['discount'] as int,
       total: j['total'] as int,

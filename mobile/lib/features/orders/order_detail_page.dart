@@ -9,6 +9,7 @@ import '../auth/auth_controller.dart';
 import '../pos/pos_models.dart' show formatQty;
 import 'order_models.dart';
 import 'orders_repository.dart';
+import '../deliveries/delivery_section.dart';
 
 const _flow = ['RECEIVED', 'WASHING', 'DRYING', 'IRONING', 'READY', 'COMPLETED'];
 
@@ -277,6 +278,7 @@ class _OrderDetailPageState extends ConsumerState<OrderDetailPage> {
             ),
           ),
           const SizedBox(height: 16),
+          DeliverySection(order: o),
 
           // --- Pembayaran ---
           Text('Riwayat pembayaran', style: theme.textTheme.titleMedium),
