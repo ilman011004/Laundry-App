@@ -28,6 +28,29 @@ class PosRepository {
       total: d['total'] as int,
     );
   }
+
+  /// Mengunggah satu foto. kind: RECEIVED (saat diterima) atau READY (saat siap).
+  Future<void> uploadPhoto(int orderId, String path, String kind) async {
+    Future<void> attempt() async {
+      // FormData hanya bisa dipakai sekali, jadi dibuat baru tiap percobaan.
+      final form = FormData.fromMap({
+        'kind': kind,
+        'photo': await MultipartFile.fromFile(path, filename: 'foto.jpg'),
+      });
+      await _dio.post('/api/orders/$orderId/photos', data: form);
+    }
+
+    try {
+      await attempt();
+    } on DioException catch (e) {
+      // Token kedaluwarsa: interceptor sudah memperbarui token, coba sekali lagi.
+      if (e.response?.statusCode == 401) {
+        await attempt();
+      } else {
+        rethrow;
+      }
+    }
+  }
 }
 
 final posRepositoryProvider =

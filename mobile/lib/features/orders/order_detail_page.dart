@@ -48,11 +48,18 @@ class _OrderDetailPageState extends ConsumerState<OrderDetailPage> {
   Future<void> _run(Future<String?> Function() action, String successText) async {
     if (_busy) return;
     setState(() => _busy = true);
+
+    // Disimpan sebelum await agar aman walau halaman sudah ditutup.
+    final revision = ref.read(ordersRevisionProvider.notifier);
+
     try {
       final warning = await action();
       _changed = true;
-      _refresh();
-      if (mounted) _snack(warning ?? successText);
+      revision.bump(); // Beranda (kas dan ringkasan) ikut dimuat ulang
+      if (mounted) {
+        _refresh();
+        _snack(warning ?? successText);
+      }
     } catch (e) {
       if (mounted) _snack(errorMessage(e));
     }

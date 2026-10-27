@@ -43,6 +43,10 @@ app.use('/api/orders', require('./routes/orders.routes'));
 app.use('/api/reports', require('./routes/reports.routes'));
 app.use('/api/expenses', require('./routes/expenses.routes'));
 app.use('/api/deliveries', require('./routes/deliveries.routes'));
+app.use('/api/dashboard', require('./routes/dashboard.routes'));
+app.use('/api/cash', require('./routes/cash.routes'));
+app.use('/api/business', require('./routes/business.routes'));
+app.use('/api/photos', require('./routes/photos.routes'));
 
 
 app.use(notFound);

@@ -49,6 +49,8 @@ class AuthInterceptor extends Interceptor {
     }
 
     if (!refreshed) return handler.next(err);
+        // FormData tidak bisa dikirim ulang. Token sudah diperbarui, pemanggil cukup mencoba lagi.
+    if (request.data is FormData) return handler.next(err);
 
     try {
       final token = await storage.readAccess();

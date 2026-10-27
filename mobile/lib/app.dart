@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'core/theme.dart';
 import 'features/auth/auth_controller.dart';
 import 'features/auth/login_page.dart';
+import 'features/cash/cash_page.dart';
 import 'features/customers/customer_detail_page.dart';
 import 'features/customers/customer_form_page.dart';
 import 'features/customers/customers_list_page.dart';
@@ -12,6 +13,8 @@ import 'features/home/home_page.dart';
 import 'features/orders/order_detail_page.dart';
 import 'features/orders/orders_list_page.dart';
 import 'features/pos/pos_page.dart';
+import 'features/settings/business_page.dart';
+import 'features/settings/settings_page.dart';
 import 'features/shell/main_shell.dart';
 
 final _rootKey = GlobalKey<NavigatorState>();
@@ -40,6 +43,20 @@ final routerProvider = Provider<GoRouter>((ref) {
     routes: [
       GoRoute(path: '/splash', builder: (context, state) => const SplashPage()),
       GoRoute(path: '/login', builder: (context, state) => const LoginPage()),
+
+      // Halaman di luar tab (menutupi bar tab di bawah)
+      GoRoute(path: '/cash', builder: (context, state) => const CashPage()),
+      GoRoute(
+        path: '/settings',
+        builder: (context, state) => const SettingsPage(),
+        routes: [
+          GoRoute(
+            path: 'business',
+            builder: (context, state) => const BusinessPage(),
+          ),
+        ],
+      ),
+
       StatefulShellRoute.indexedStack(
         builder: (context, state, shell) => MainShell(shell: shell),
         // Urutan cabang harus sama dengan urutan tab di main_shell.dart:

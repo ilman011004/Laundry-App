@@ -85,6 +85,7 @@ model User {
   isActive     Boolean  @default(true) @map("is_active")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
+  photos            OrderPhoto[]
 
   role          Role                 @relation(fields: [roleId], references: [id])
   orders        Order[]
@@ -92,6 +93,8 @@ model User {
   payments      Payment[]
   expenses      Expense[]
   deliveries    Delivery[]
+  deposits          CashDeposit[] @relation("DepositCashier")
+  confirmedDeposits CashDeposit[] @relation("DepositConfirmer")
 
   @@map("users")
 }
@@ -197,6 +200,7 @@ model Order {
   history    OrderStatusHistory[]
   payments   Payment[]
   deliveries Delivery[]
+  photos     OrderPhoto[]
 
   @@index([customerId])
   @@index([workStatus])
@@ -311,4 +315,56 @@ model Expense {
 
   @@index([spentAt])
   @@map("expenses")
+}
+
+enum DepositStatus {
+  PENDING
+  CONFIRMED
+}
+
+model CashDeposit {
+  id            Int           @id @default(autoincrement())
+  cashierId     Int           @map("cashier_id")
+  amount        Int
+  note          String?
+  status        DepositStatus @default(PENDING)
+  createdAt     DateTime      @default(now()) @map("created_at")
+  confirmedAt   DateTime?     @map("confirmed_at")
+  confirmedById Int?          @map("confirmed_by_id")
+
+  cashier     User  @relation("DepositCashier", fields: [cashierId], references: [id])
+  confirmedBy User? @relation("DepositConfirmer", fields: [confirmedById], references: [id])
+
+  @@index([cashierId])
+  @@index([status])
+  @@map("cash_deposits")
+}
+
+model AppSetting {
+  key   String @id
+  value String
+
+  @@map("app_settings")
+}
+
+enum PhotoKind {
+  RECEIVED
+  READY
+}
+
+model OrderPhoto {
+  id           Int       @id @default(autoincrement())
+  orderId      Int       @map("order_id")
+  kind         PhotoKind
+  filename     String
+  mimeType     String    @map("mime_type")
+  sizeBytes    Int       @map("size_bytes")
+  uploadedById Int       @map("uploaded_by_id")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  order      Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  uploadedBy User  @relation(fields: [uploadedById], references: [id])
+
+  @@index([orderId])
+  @@map("order_photos")
 }

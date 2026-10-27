@@ -1,66 +1,451 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../core/api_error.dart';
-import '../../core/api_providers.dart';
+import '../../core/format.dart';
 import '../../core/labels.dart';
 import '../auth/auth_controller.dart';
+import '../cash/cash_repository.dart';
+import '../settings/business_repository.dart';
+import 'dashboard_repository.dart';
 
-/// Halaman utama sementara. Menu kasir, pesanan, dan laporan menyusul.
+String _lateText(DateTime? est) {
+  if (est == null) return '';
+  final m = DateTime.now().toUtc().difference(est.toUtc()).inMinutes;
+  if (m < 60) return 'telat ${m < 1 ? 1 : m} menit';
+  if (m < 48 * 60) return 'telat ${m ~/ 60} jam';
+  return 'telat ${m ~/ (24 * 60)} hari';
+}
+
 class HomePage extends ConsumerWidget {
   const HomePage({super.key});
-
-  // Tombol uji sementara: memanggil API yang butuh token.
-  // Jika token sudah kedaluwarsa, penyegaran otomatis terjadi di balik layar.
-  Future<void> _checkSession(BuildContext context, WidgetRef ref) async {
-    String message;
-    try {
-      final res = await ref.read(dioProvider).get('/api/auth/me');
-      message = 'Sesi aktif sebagai ${res.data['user']['name']}';
-    } catch (e) {
-      message = errorMessage(e);
-    }
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
-  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final user = ref.watch(authControllerProvider).user;
+    final async = ref.watch(dashboardProvider);
+    final bizName = ref.watch(businessProvider).asData?.value.name ?? 'Laundry';
     final theme = Theme.of(context);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Laundry'),
+        titleSpacing: 16,
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(bizName,
+                style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
+            Text('${user?.name ?? '-'} • ${labelOf(roleLabel, user?.role)}',
+                style: theme.textTheme.bodySmall),
+          ],
+        ),
         actions: [
           IconButton(
-            tooltip: 'Keluar',
-            icon: const Icon(Icons.logout),
-            onPressed: () => ref.read(authControllerProvider.notifier).logout(),
+            tooltip: 'Pengaturan',
+            icon: const Icon(Icons.settings_outlined),
+            onPressed: () => context.push('/settings'),
           ),
         ],
       ),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
+      body: async.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (e, _) => Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(errorMessage(e), textAlign: TextAlign.center),
+                const SizedBox(height: 12),
+                OutlinedButton(
+                  onPressed: () => ref.invalidate(dashboardProvider),
+                  child: const Text('Coba lagi'),
+                ),
+              ],
+            ),
+          ),
+        ),
+        data: (d) => RefreshIndicator(
+          onRefresh: () async {
+            ref.invalidate(businessProvider);
+            ref.invalidate(dashboardProvider);
+            await ref.read(dashboardProvider.future);
+          },
+          child: ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
             children: [
-              Text(
-                'Halo, ${user?.name ?? '-'}',
-                style: theme.textTheme.headlineSmall,
+              _CashHero(
+                cash: d.cash,
+                money: d.money,
+                onOpen: () => context.push('/cash'),
               ),
-              const SizedBox(height: 8),
-              Text('Peran: ${labelOf(roleLabel, user?.role)}'),
-              const SizedBox(height: 24),
-              const Text(
-                'Menu kasir, pesanan, dan laporan hadir di tahap berikutnya.',
-                textAlign: TextAlign.center,
+              if (d.overdue > 0) ...[
+                const SizedBox(height: 16),
+                _OverdueCard(d: d),
+              ],
+              const SizedBox(height: 20),
+              _Section('Ringkasan pesanan'),
+              Row(
+                children: [
+                  Expanded(
+                    child: _Stat(
+                      label: 'Diproses',
+                      value: '${d.inProgress}',
+                      icon: Icons.local_laundry_service,
+                      color: Colors.blue,
+                      onTap: () => context.go('/orders'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _Stat(
+                      label: 'Siap diambil',
+                      value: '${d.ready}',
+                      icon: Icons.inventory_2_outlined,
+                      color: Colors.green,
+                      onTap: () => context.go('/orders'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _Stat(
+                      label: 'Selesai hari ini',
+                      value: '${d.completedToday}',
+                      icon: Icons.check_circle_outline,
+                      color: Colors.blueGrey,
+                      onTap: () => context.go('/orders'),
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 24),
-              OutlinedButton(
-                onPressed: () => _checkSession(context, ref),
-                child: const Text('Tes sesi (sementara)'),
+              const SizedBox(height: 20),
+              _Section('Pembayaran'),
+              Row(
+                children: [
+                  Expanded(
+                    child: _Stat(
+                      label: 'Belum lunas',
+                      value: '${d.unpaidCount} pesanan',
+                      icon: Icons.hourglass_bottom,
+                      color: Colors.orange,
+                      onTap: () => context.go('/orders'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _Stat(
+                      label: 'Total tagihan',
+                      value: formatRupiah(d.outstanding),
+                      icon: Icons.receipt_long,
+                      color: Colors.red,
+                      onTap: () => context.go('/orders'),
+                    ),
+                  ),
+                ],
               ),
+              if (d.topDebts.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Card(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                        child: Text('Tagihan terbesar', style: theme.textTheme.titleSmall),
+                      ),
+                      for (final t in d.topDebts)
+                        ListTile(
+                          dense: true,
+                          title: Text(t.customerName),
+                          subtitle: Text(t.orderNumber),
+                          trailing: Text(
+                            formatRupiah(t.remaining),
+                            style: TextStyle(
+                              color: theme.colorScheme.error,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          onTap: () => context.push('/orders/${t.id}'),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+              const SizedBox(height: 20),
+              _Section('Hari ini'),
+              Row(
+                children: [
+                  Expanded(
+                    child: _Stat(
+                      label: 'Pesanan masuk',
+                      value: '${d.ordersToday}',
+                      icon: Icons.add_shopping_cart,
+                      color: Colors.teal,
+                    ),
+                  ),
+                  if (d.money != null) ...[
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _Stat(
+                        label: 'Uang masuk',
+                        value: formatRupiah(d.money!.incomeToday),
+                        icon: Icons.trending_up,
+                        color: Colors.green,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              if (d.money != null) ...[
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _Stat(
+                        label: 'Masuk bulan ini',
+                        value: formatRupiah(d.money!.incomeMonth),
+                        icon: Icons.calendar_month,
+                        color: Colors.indigo,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _Stat(
+                        label: 'Pengeluaran bulan ini',
+                        value: formatRupiah(d.money!.expensesMonth),
+                        icon: Icons.trending_down,
+                        color: Colors.brown,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _Section extends StatelessWidget {
+  const _Section(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: Text(text,
+            style: Theme.of(context)
+                .textTheme
+                .titleMedium
+                ?.copyWith(fontWeight: FontWeight.w700)),
+      );
+}
+
+class _CashHero extends StatelessWidget {
+  const _CashHero({required this.cash, required this.money, required this.onOpen});
+
+  final CashSummary cash;
+  final Money? money;
+  final VoidCallback onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final text = cs.onPrimary;
+
+    Widget line(String label, int value) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 2),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(label,
+                    style: TextStyle(color: text.withValues(alpha: 0.85), fontSize: 13)),
+              ),
+              Text(formatRupiah(value),
+                  style: TextStyle(color: text, fontSize: 13, fontWeight: FontWeight.w600)),
+            ],
+          ),
+        );
+
+    final isOwner = cash.isOwner;
+    final amount = isOwner ? cash.total : cash.held;
+
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [cs.primary, Color.lerp(cs.primary, Colors.black, 0.4)!],
+        ),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: onOpen,
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.account_balance_wallet_outlined, color: text),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        isOwner ? 'Total kas usaha (tunai)' : 'Kas saya (tunai)',
+                        style: TextStyle(color: text.withValues(alpha: 0.9)),
+                      ),
+                    ),
+                    Icon(Icons.chevron_right, color: text),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  formatRupiah(amount),
+                  style: TextStyle(
+                    color: text,
+                    fontSize: 32,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                if (isOwner) ...[
+                  line('Di pemilik', cash.ownerCash),
+                  line('Di tangan kasir', cash.cashierHeldTotal),
+                  line('Setoran belum diterima (${cash.pendingCount})', cash.pendingTotal),
+                  if (money != null) ...[
+                    Divider(color: text.withValues(alpha: 0.3)),
+                    line('Transfer (di luar kas)', money!.transfer),
+                    line('QRIS (di luar kas)', money!.qris),
+                  ],
+                ] else ...[
+                  if (cash.pendingDeposits > 0)
+                    line('Setoran menunggu pemilik', cash.pendingDeposits),
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: FilledButton.tonalIcon(
+                      onPressed: onOpen,
+                      icon: const Icon(Icons.savings_outlined),
+                      label: const Text('Setor ke pemilik'),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _OverdueCard extends StatelessWidget {
+  const _OverdueCard({required this.d});
+
+  final Dashboard d;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
+    return Card(
+      color: cs.errorContainer,
+      child: Column(
+        children: [
+          ListTile(
+            leading: Icon(Icons.warning_amber_rounded, color: cs.onErrorContainer),
+            title: Text(
+              '${d.overdue} pesanan melewati estimasi selesai',
+              style: TextStyle(
+                color: cs.onErrorContainer,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            subtitle: Text('Segera diselesaikan',
+                style: TextStyle(color: cs.onErrorContainer)),
+          ),
+          for (final o in d.overdueList)
+            ListTile(
+              dense: true,
+              title: Text(o.customerName,
+                  style: TextStyle(
+                      color: cs.onErrorContainer, fontWeight: FontWeight.w600)),
+              subtitle: Text(
+                '${o.orderNumber} • ${labelOf(workStatusLabel, o.workStatus)}',
+                style: TextStyle(color: cs.onErrorContainer),
+              ),
+              trailing: Text(
+                _lateText(o.estimatedDoneAt),
+                style: TextStyle(
+                    color: cs.error, fontWeight: FontWeight.w700, fontSize: 12),
+              ),
+              onTap: () => context.push('/orders/${o.id}'),
+            ),
+          if (d.overdue > d.overdueList.length)
+            TextButton(
+              onPressed: () => context.go('/orders'),
+              child: Text('Lihat ${d.overdue - d.overdueList.length} lainnya'),
+            ),
+          const SizedBox(height: 4),
+        ],
+      ),
+    );
+  }
+}
+
+class _Stat extends StatelessWidget {
+  const _Stat({
+    required this.label,
+    required this.value,
+    required this.icon,
+    required this.color,
+    this.onTap,
+  });
+
+  final String label;
+  final String value;
+  final IconData icon;
+  final Color color;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      elevation: 0,
+      color: color.withValues(alpha: 0.10),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              CircleAvatar(
+                radius: 16,
+                backgroundColor: color.withValues(alpha: 0.18),
+                child: Icon(icon, color: color, size: 18),
+              ),
+              const SizedBox(height: 10),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(value,
+                    style: theme.textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w700)),
+              ),
+              const SizedBox(height: 2),
+              Text(label, style: theme.textTheme.bodySmall),
             ],
           ),
         ),
