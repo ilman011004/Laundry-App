@@ -23,7 +23,7 @@ class _CustomersListPageState extends ConsumerState<CustomersListPage> {
   bool _hasMore = true;
   bool _loading = false;
   String? _error;
-  int _requestId = 0; // untuk mengabaikan hasil permintaan yang sudah usang
+  int _requestId = 0;
 
   @override
   void initState() {
@@ -83,6 +83,7 @@ class _CustomersListPageState extends ConsumerState<CustomersListPage> {
   }
 
   void _onSearchChanged(String _) {
+    setState(() {});
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 400), _reload);
   }
@@ -104,7 +105,7 @@ class _CustomersListPageState extends ConsumerState<CustomersListPage> {
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
             child: TextField(
               controller: _searchCtrl,
               onChanged: _onSearchChanged,
@@ -121,6 +122,23 @@ class _CustomersListPageState extends ConsumerState<CustomersListPage> {
                           _reload();
                         },
                       ),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.star, size: 16, color: Colors.amber),
+                  const SizedBox(width: 4),
+                  Text(
+                    '= langganan (${Customer.regularThreshold} pesanan atau lebih)',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
               ),
             ),
           ),
@@ -150,42 +168,135 @@ class _CustomersListPageState extends ConsumerState<CustomersListPage> {
       );
     }
     if (_items.isEmpty) {
-      return const Center(child: Text('Belum ada pelanggan.'));
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Text(
+            _searchCtrl.text.trim().isEmpty
+                ? 'Belum ada pelanggan.\nKetuk "Tambah" untuk menambahkan.'
+                : 'Pelanggan tidak ditemukan.',
+            textAlign: TextAlign.center,
+          ),
+        ),
+      );
     }
 
     return RefreshIndicator(
       onRefresh: _reload,
-      child: ListView.separated(
+      child: ListView.builder(
         controller: _scroll,
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.only(bottom: 88),
+        padding: const EdgeInsets.fromLTRB(12, 4, 12, 88),
         itemCount: _items.length + (_loading || _error != null ? 1 : 0),
-        separatorBuilder: (_, _) => const Divider(height: 1),
         itemBuilder: (context, i) {
           if (i >= _items.length) {
             return Padding(
               padding: const EdgeInsets.all(16),
               child: Center(
                 child: _error != null
-                    ? TextButton(onPressed: _load, child: Text('$_error  Ketuk untuk ulang'))
+                    ? TextButton(
+                        onPressed: _load,
+                        child: Text('$_error  Ketuk untuk ulang'))
                     : const CircularProgressIndicator(),
               ),
             );
           }
           final c = _items[i];
-          final address = c.defaultAddress?.address;
-          return ListTile(
-            leading: CircleAvatar(
-              child: Text(c.name.isEmpty ? '?' : c.name[0].toUpperCase()),
-            ),
-            title: Text(c.name),
-            subtitle: Text(address == null ? c.phone : '${c.phone}\n$address',
-                maxLines: 2, overflow: TextOverflow.ellipsis),
-            isThreeLine: address != null,
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => _open('/customers/${c.id}'),
-          );
+          return _CustomerCard(customer: c, onTap: () => _open('/customers/${c.id}'));
         },
+      ),
+    );
+  }
+}
+
+class _CustomerCard extends StatelessWidget {
+  const _CustomerCard({required this.customer, required this.onTap});
+
+  final Customer customer;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final c = customer;
+
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            children: [
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  CircleAvatar(
+                    radius: 22,
+                    child: Text(c.name.isEmpty ? '?' : c.name[0].toUpperCase()),
+                  ),
+                  if (c.isRegular)
+                    const Positioned(
+                      right: -4,
+                      top: -4,
+                      child: Icon(Icons.star, size: 18, color: Colors.amber),
+                    ),
+                ],
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            c.name,
+                            style: theme.textTheme.titleMedium,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (c.isRegular) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.amber.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: const Text(
+                              'Langganan',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF8A6100),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(c.phone, style: theme.textTheme.bodySmall),
+                    const SizedBox(height: 2),
+                    Text(
+                      c.orderCount == 0
+                          ? 'Belum pernah laundry'
+                          : '${c.orderCount}x laundry',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.primary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right),
+            ],
+          ),
+        ),
       ),
     );
   }

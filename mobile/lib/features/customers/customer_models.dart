@@ -29,6 +29,7 @@ class Customer {
     required this.phone,
     this.notes,
     this.addresses = const [],
+    this.orderCount = 0,
   });
 
   final int id;
@@ -36,6 +37,13 @@ class Customer {
   final String phone;
   final String? notes;
   final List<CustomerAddress> addresses;
+
+  /// Jumlah pesanan (tidak termasuk yang dibatalkan). Hanya terisi pada daftar pelanggan.
+  final int orderCount;
+
+  /// Pelanggan dianggap langganan mulai jumlah pesanan ini.
+  static const regularThreshold = 5;
+  bool get isRegular => orderCount >= regularThreshold;
 
   /// Alamat utama (pada daftar, backend hanya mengirim alamat utama).
   CustomerAddress? get defaultAddress {
@@ -53,6 +61,7 @@ class Customer {
         addresses: ((j['addresses'] as List?) ?? [])
             .map((e) => CustomerAddress.fromJson(e as Map<String, dynamic>))
             .toList(),
+        orderCount: (j['orderCount'] as int?) ?? 0,
       );
 }
 

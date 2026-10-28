@@ -76,12 +76,17 @@ async function list(req, res) {
       orderBy: { name: 'asc' },
       skip: (page - 1) * limit,
       take: limit,
-      include: { addresses: { where: { isDefault: true }, take: 1 } },
+      include: {
+        addresses: { where: { isDefault: true }, take: 1 },
+        _count: {
+          select: { orders: { where: { workStatus: { not: 'CANCELLED' } } } },
+        },
+      },
     }),
   ]);
 
   res.json({
-    data,
+    data: data.map(({ _count, ...c }) => ({ ...c, orderCount: _count.orders })),
     meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
   });
 }

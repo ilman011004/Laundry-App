@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/api_error.dart';
-import 'customer_models.dart';
 import 'customers_repository.dart';
 
 class CustomerFormPage extends ConsumerStatefulWidget {
@@ -20,8 +19,6 @@ class _CustomerFormPageState extends ConsumerState<CustomerFormPage> {
   final _name = TextEditingController();
   final _phone = TextEditingController();
   final _notes = TextEditingController();
-  final _addressLabel = TextEditingController(text: 'Rumah');
-  final _address = TextEditingController();
 
   bool get _isEdit => widget.customerId != null;
   bool _loadingData = false;
@@ -36,9 +33,9 @@ class _CustomerFormPageState extends ConsumerState<CustomerFormPage> {
 
   @override
   void dispose() {
-    for (final c in [_name, _phone, _notes, _addressLabel, _address]) {
-      c.dispose();
-    }
+    _name.dispose();
+    _phone.dispose();
+    _notes.dispose();
     super.dispose();
   }
 
@@ -46,10 +43,9 @@ class _CustomerFormPageState extends ConsumerState<CustomerFormPage> {
     setState(() => _loadingData = true);
     try {
       final d = await ref.read(customersRepositoryProvider).detail(widget.customerId!);
-      final Customer c = d.customer;
-      _name.text = c.name;
-      _phone.text = c.phone;
-      _notes.text = c.notes ?? '';
+      _name.text = d.customer.name;
+      _phone.text = d.customer.phone;
+      _notes.text = d.customer.notes ?? '';
     } catch (e) {
       _error = errorMessage(e);
     }
@@ -69,13 +65,7 @@ class _CustomerFormPageState extends ConsumerState<CustomerFormPage> {
         await repo.update(widget.customerId!,
             name: _name.text, phone: _phone.text, notes: _notes.text);
       } else {
-        await repo.create(
-          name: _name.text,
-          phone: _phone.text,
-          notes: _notes.text,
-          addressLabel: _addressLabel.text,
-          address: _address.text,
-        );
+        await repo.create(name: _name.text, phone: _phone.text);
       }
       if (mounted) context.pop(true);
     } catch (e) {
@@ -104,6 +94,7 @@ class _CustomerFormPageState extends ConsumerState<CustomerFormPage> {
                     TextFormField(
                       controller: _name,
                       enabled: !_saving,
+                      autofocus: !_isEdit,
                       textCapitalization: TextCapitalization.words,
                       textInputAction: TextInputAction.next,
                       decoration: const InputDecoration(labelText: 'Nama'),
@@ -115,7 +106,8 @@ class _CustomerFormPageState extends ConsumerState<CustomerFormPage> {
                       controller: _phone,
                       enabled: !_saving,
                       keyboardType: TextInputType.phone,
-                      textInputAction: TextInputAction.next,
+                      textInputAction: _isEdit ? TextInputAction.next : TextInputAction.done,
+                      onFieldSubmitted: _isEdit ? null : (_) => _save(),
                       decoration: const InputDecoration(
                         labelText: 'Nomor HP',
                         hintText: '0812xxxxxxx',
@@ -123,31 +115,12 @@ class _CustomerFormPageState extends ConsumerState<CustomerFormPage> {
                       validator: (v) =>
                           (v == null || v.trim().isEmpty) ? 'Nomor HP wajib diisi' : null,
                     ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: _notes,
-                      enabled: !_saving,
-                      textInputAction: TextInputAction.next,
-                      decoration: const InputDecoration(labelText: 'Catatan (opsional)'),
-                    ),
-                    if (!_isEdit) ...[
-                      const SizedBox(height: 24),
-                      Text('Alamat (opsional)',
-                          style: Theme.of(context).textTheme.titleSmall),
-                      const SizedBox(height: 8),
-                      TextFormField(
-                        controller: _addressLabel,
-                        enabled: !_saving,
-                        textInputAction: TextInputAction.next,
-                        decoration: const InputDecoration(labelText: 'Label (Rumah, Kantor, ...)'),
-                      ),
+                    if (_isEdit) ...[
                       const SizedBox(height: 16),
                       TextFormField(
-                        controller: _address,
+                        controller: _notes,
                         enabled: !_saving,
-                        minLines: 2,
-                        maxLines: 4,
-                        decoration: const InputDecoration(labelText: 'Alamat lengkap'),
+                        decoration: const InputDecoration(labelText: 'Catatan (opsional)'),
                       ),
                     ],
                     if (_error != null) ...[
