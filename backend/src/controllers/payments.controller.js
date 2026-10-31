@@ -1,6 +1,7 @@
 const { z } = require('zod');
 const prisma = require('../lib/prisma');
 const { AppError } = require('../middleware/errorHandler');
+const { outletScope } = require('../middleware/scope');
 
 const idParam = z.object({ id: z.coerce.number().int().positive() });
 
@@ -20,10 +21,11 @@ function derivePaymentStatus(paid, total) {
 async function create(req, res) {
   const { id } = idParam.parse(req.params);
   const body = paymentSchema.parse(req.body);
+  const sc = outletScope(req.scope);
 
   const result = await prisma.$transaction(async (tx) => {
-    const order = await tx.order.findUnique({
-      where: { id },
+    const order = await tx.order.findFirst({
+      where: { id, ...sc },
       select: { id: true, total: true, paidAmount: true, workStatus: true },
     });
     if (!order) throw new AppError('Pesanan tidak ditemukan', 404);
@@ -78,8 +80,8 @@ async function create(req, res) {
 async function list(req, res) {
   const { id } = idParam.parse(req.params);
 
-  const order = await prisma.order.findUnique({
-    where: { id },
+  const order = await prisma.order.findFirst({
+    where: { id, ...outletScope(req.scope) },
     select: { id: true, orderNumber: true, total: true, paidAmount: true, paymentStatus: true },
   });
   if (!order) throw new AppError('Pesanan tidak ditemukan', 404);

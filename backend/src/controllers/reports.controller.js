@@ -1,6 +1,7 @@
 const { z } = require('zod');
 const prisma = require('../lib/prisma');
 const { AppError } = require('../middleware/errorHandler');
+const { outletScope } = require('../middleware/scope');
 const t = require('../utils/time');
 
 const ACTIVE = ['RECEIVED', 'WASHING', 'DRYING', 'IRONING'];
@@ -11,20 +12,20 @@ function emptyMethods() {
   return { CASH: 0, TRANSFER: 0, QRIS: 0 };
 }
 
-// Angka ringkas untuk satu periode [from, to)
-async function periodFigures(from, to) {
+// Angka ringkas untuk satu periode [from, to) dalam lingkup sc
+async function periodFigures(from, to, sc) {
   const [orders, cash, spent] = await Promise.all([
     prisma.order.aggregate({
-      where: { ...notCancelled, createdAt: { gte: from, lt: to } },
+      where: { ...sc, ...notCancelled, createdAt: { gte: from, lt: to } },
       _count: { _all: true },
       _sum: { total: true },
     }),
     prisma.payment.aggregate({
-      where: { paidAt: { gte: from, lt: to } },
+      where: { order: sc, paidAt: { gte: from, lt: to } },
       _sum: { amount: true },
     }),
     prisma.expense.aggregate({
-      where: { spentAt: { gte: from, lt: to } },
+      where: { ...sc, spentAt: { gte: from, lt: to } },
       _sum: { amount: true },
     }),
   ]);
@@ -43,26 +44,30 @@ async function periodFigures(from, to) {
 
 // ---------- Dashboard ----------
 async function dashboard(req, res) {
+  const tz = req.scope.timezone;
+  const sc = outletScope(req.scope);
   const now = new Date();
-  const todayStart = t.startOfDay(now);
+  const todayStart = t.startOfDay(now, tz);
   const tomorrowStart = t.addDays(todayStart, 1);
-  const monthStart = t.startOfMonth(now);
-  const nextMonthStart = t.startOfNextMonth(now);
+  const monthStart = t.startOfMonth(now, tz);
+  const nextMonthStart = t.startOfNextMonth(now, tz);
 
   const [today, month, inProcess, ready, late, receivable, byMethod] = await Promise.all([
-    periodFigures(todayStart, tomorrowStart),
-    periodFigures(monthStart, nextMonthStart),
-    prisma.order.count({ where: { workStatus: { in: ACTIVE } } }),
-    prisma.order.count({ where: { workStatus: 'READY' } }),
-    prisma.order.count({ where: { workStatus: { in: ACTIVE }, estimatedDoneAt: { lt: now } } }),
+    periodFigures(todayStart, tomorrowStart, sc),
+    periodFigures(monthStart, nextMonthStart, sc),
+    prisma.order.count({ where: { ...sc, workStatus: { in: ACTIVE } } }),
+    prisma.order.count({ where: { ...sc, workStatus: 'READY' } }),
+    prisma.order.count({
+      where: { ...sc, workStatus: { in: ACTIVE }, estimatedDoneAt: { lt: now } },
+    }),
     prisma.order.aggregate({
-      where: { ...notCancelled, paymentStatus: { in: ['UNPAID', 'PARTIAL'] } },
+      where: { ...sc, ...notCancelled, paymentStatus: { in: ['UNPAID', 'PARTIAL'] } },
       _count: { _all: true },
       _sum: { total: true, paidAmount: true },
     }),
     prisma.payment.groupBy({
       by: ['method'],
-      where: { paidAt: { gte: todayStart, lt: tomorrowStart } },
+      where: { order: sc, paidAt: { gte: todayStart, lt: tomorrowStart } },
       _sum: { amount: true },
     }),
   ]);
@@ -73,8 +78,9 @@ async function dashboard(req, res) {
   res.json({
     data: {
       generatedAt: now.toISOString(),
-      today: { date: t.dayKey(now), ...today, cashByMethod },
-      month: { month: t.dayKey(monthStart).slice(0, 7), ...month },
+      timezone: tz,
+      today: { date: t.dayKey(now, tz), ...today, cashByMethod },
+      month: { month: t.dayKey(monthStart, tz).slice(0, 7), ...month },
       queue: { inProcess, ready, late },
       receivables: {
         orderCount: receivable._count._all,
@@ -93,12 +99,14 @@ const summaryQuery = z.object({
 
 async function summary(req, res) {
   const q = summaryQuery.parse(req.query);
+  const tz = req.scope.timezone;
+  const sc = outletScope(req.scope);
 
-  const from = t.parseLocalDate(q.from);
-  const toExclusive = t.addDays(t.parseLocalDate(q.to), 1);
+  const from = t.parseLocalDate(q.from, tz);
+  const toExclusive = t.addDays(t.parseLocalDate(q.to, tz), 1);
 
   // Tolak tanggal yang tidak ada di kalender (mis. 2026-02-31)
-  if (t.dayKey(from) !== q.from || t.dayKey(t.addDays(toExclusive, -1)) !== q.to) {
+  if (t.dayKey(from, tz) !== q.from || t.dayKey(t.addDays(toExclusive, -1), tz) !== q.to) {
     throw new AppError('Tanggal tidak valid', 400);
   }
 
@@ -108,20 +116,20 @@ async function summary(req, res) {
 
   const [orders, payments, expenses, topServices] = await Promise.all([
     prisma.order.findMany({
-      where: { ...notCancelled, createdAt: { gte: from, lt: toExclusive } },
+      where: { ...sc, ...notCancelled, createdAt: { gte: from, lt: toExclusive } },
       select: { createdAt: true, total: true },
     }),
     prisma.payment.findMany({
-      where: { paidAt: { gte: from, lt: toExclusive } },
+      where: { order: sc, paidAt: { gte: from, lt: toExclusive } },
       select: { paidAt: true, amount: true, method: true },
     }),
     prisma.expense.findMany({
-      where: { spentAt: { gte: from, lt: toExclusive } },
+      where: { ...sc, spentAt: { gte: from, lt: toExclusive } },
       select: { spentAt: true, amount: true, category: true },
     }),
     prisma.orderItem.groupBy({
       by: ['serviceName'],
-      where: { order: { ...notCancelled, createdAt: { gte: from, lt: toExclusive } } },
+      where: { order: { ...sc, ...notCancelled, createdAt: { gte: from, lt: toExclusive } } },
       _sum: { lineTotal: true, quantity: true },
       _count: { _all: true },
       orderBy: { _sum: { lineTotal: 'desc' } },
@@ -132,25 +140,25 @@ async function summary(req, res) {
   // Siapkan semua tanggal (termasuk yang kosong) agar grafik tidak bolong
   const rows = new Map();
   for (let i = 0; i < days; i++) {
-    const key = t.dayKey(t.addDays(from, i));
+    const key = t.dayKey(t.addDays(from, i), tz);
     rows.set(key, { date: key, orderCount: 0, sales: 0, cashIn: 0, expenses: 0 });
   }
 
   for (const o of orders) {
-    const r = rows.get(t.dayKey(o.createdAt));
+    const r = rows.get(t.dayKey(o.createdAt, tz));
     r.orderCount += 1;
     r.sales += o.total;
   }
 
   const cashByMethod = emptyMethods();
   for (const p of payments) {
-    rows.get(t.dayKey(p.paidAt)).cashIn += p.amount;
+    rows.get(t.dayKey(p.paidAt, tz)).cashIn += p.amount;
     cashByMethod[p.method] += p.amount;
   }
 
   const expenseByCategory = {};
   for (const e of expenses) {
-    rows.get(t.dayKey(e.spentAt)).expenses += e.amount;
+    rows.get(t.dayKey(e.spentAt, tz)).expenses += e.amount;
     expenseByCategory[e.category] = (expenseByCategory[e.category] || 0) + e.amount;
   }
 

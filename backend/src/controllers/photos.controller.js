@@ -5,6 +5,7 @@ const multer = require('multer');
 const { z } = require('zod');
 const prisma = require('../lib/prisma');
 const { AppError } = require('../middleware/errorHandler');
+const { outletScope } = require('../middleware/scope');
 
 const fsp = fs.promises;
 
@@ -68,8 +69,8 @@ async function create(req, res) {
   const type = detectImage(req.file.buffer);
   if (!type) throw new AppError('File harus berupa foto (JPG, PNG, atau WebP)', 400);
 
-  const order = await prisma.order.findUnique({
-    where: { id },
+  const order = await prisma.order.findFirst({
+    where: { id, ...outletScope(req.scope) },
     select: { id: true, workStatus: true },
   });
   if (!order) throw new AppError('Pesanan tidak ditemukan', 404);
@@ -109,6 +110,13 @@ async function create(req, res) {
 
 async function list(req, res) {
   const { id } = idParam.parse(req.params);
+
+  const order = await prisma.order.findFirst({
+    where: { id, ...outletScope(req.scope) },
+    select: { id: true },
+  });
+  if (!order) throw new AppError('Pesanan tidak ditemukan', 404);
+
   const photos = await prisma.orderPhoto.findMany({
     where: { orderId: id },
     orderBy: { id: 'asc' },
@@ -118,7 +126,10 @@ async function list(req, res) {
 
 async function file(req, res, next) {
   const { id } = idParam.parse(req.params);
-  const photo = await prisma.orderPhoto.findUnique({ where: { id } });
+  // Foto hanya boleh diambil bila pesanannya ada di lingkup pengguna
+  const photo = await prisma.orderPhoto.findFirst({
+    where: { id, order: outletScope(req.scope) },
+  });
   if (!photo) throw new AppError('Foto tidak ditemukan', 404);
 
   const full = path.join(UPLOAD_ROOT, 'orders', String(photo.orderId), photo.filename);

@@ -18,23 +18,30 @@ function detectReceiveMethod(name) {
  *   items: [{ serviceId, quantity, notes?, addonIds?: number[] }],
  *   speedId?, fulfillmentId?, discount?
  * }
+ * businessId: layanan dan opsi hanya boleh milik usaha ini.
  * Mengembalikan rincian harga lengkap (snapshot) tanpa menyimpan apa pun.
  */
-async function calculate(input) {
+async function calculate(input, businessId) {
+  if (!businessId) throw new AppError('Usaha tidak diketahui', 400);
+
   const serviceIds = [...new Set(input.items.map((i) => i.serviceId))];
   const addonIds = [...new Set(input.items.flatMap((i) => i.addonIds || []))];
 
   const [services, addons, speed, fulfillment] = await Promise.all([
-    prisma.service.findMany({ where: { id: { in: serviceIds } } }),
+    prisma.service.findMany({ where: { id: { in: serviceIds }, businessId } }),
     addonIds.length
-      ? prisma.serviceOption.findMany({ where: { id: { in: addonIds }, type: 'ADDON' } })
+      ? prisma.serviceOption.findMany({
+          where: { id: { in: addonIds }, type: 'ADDON', businessId },
+        })
       : [],
     input.speedId
-      ? prisma.serviceOption.findFirst({ where: { id: input.speedId, type: 'SPEED' } })
+      ? prisma.serviceOption.findFirst({
+          where: { id: input.speedId, type: 'SPEED', businessId },
+        })
       : null,
     input.fulfillmentId
       ? prisma.serviceOption.findFirst({
-          where: { id: input.fulfillmentId, type: 'FULFILLMENT' },
+          where: { id: input.fulfillmentId, type: 'FULFILLMENT', businessId },
         })
       : null,
   ]);

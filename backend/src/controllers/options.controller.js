@@ -41,10 +41,12 @@ const listQuery = z.object({
 
 async function list(req, res) {
   const { type, includeInactive } = listQuery.parse(req.query);
-  const showAll = includeInactive && req.user.role === 'OWNER';
+  const { businessId, isOwner } = req.scope;
+  const showAll = includeInactive && isOwner;
 
   const data = await prisma.serviceOption.findMany({
     where: {
+      businessId,
       ...(type ? { type } : {}),
       ...(showAll ? {} : { isActive: true }),
     },
@@ -55,22 +57,33 @@ async function list(req, res) {
 
 async function create(req, res) {
   const body = createSchema.parse(req.body);
+  const { businessId } = req.scope;
   checkPercent(body);
 
-  const dup = await prisma.serviceOption.findUnique({
-    where: { type_name: { type: body.type, name: body.name } },
+  const dup = await prisma.serviceOption.findFirst({
+    where: { businessId, type: body.type, name: body.name },
   });
   if (dup) throw new AppError('Opsi dengan nama itu sudah ada pada tipe yang sama', 409);
 
-  const data = await prisma.serviceOption.create({ data: body });
+  let data;
+  try {
+    data = await prisma.serviceOption.create({ data: { ...body, businessId } });
+  } catch (e) {
+    // Sementara: keunikan (type, name) di database masih global (diubah di 18c-4)
+    if (e.code === 'P2002') {
+      throw new AppError('Opsi dengan nama itu sudah ada pada tipe yang sama', 409);
+    }
+    throw e;
+  }
   res.status(201).json({ data });
 }
 
 async function update(req, res) {
   const { id } = idParam.parse(req.params);
   const body = updateSchema.parse(req.body);
+  const { businessId } = req.scope;
 
-  const current = await prisma.serviceOption.findUnique({ where: { id } });
+  const current = await prisma.serviceOption.findFirst({ where: { id, businessId } });
   if (!current) throw new AppError('Opsi tidak ditemukan', 404);
 
   checkPercent({
@@ -79,13 +92,19 @@ async function update(req, res) {
   });
 
   if (body.name && body.name !== current.name) {
-    const dup = await prisma.serviceOption.findUnique({
-      where: { type_name: { type: current.type, name: body.name } },
+    const dup = await prisma.serviceOption.findFirst({
+      where: { businessId, type: current.type, name: body.name },
     });
     if (dup) throw new AppError('Nama opsi sudah dipakai pada tipe yang sama', 409);
   }
 
-  const data = await prisma.serviceOption.update({ where: { id }, data: body });
+  let data;
+  try {
+    data = await prisma.serviceOption.update({ where: { id }, data: body });
+  } catch (e) {
+    if (e.code === 'P2002') throw new AppError('Nama opsi sudah dipakai pada tipe yang sama', 409);
+    throw e;
+  }
   res.json({ data });
 }
 

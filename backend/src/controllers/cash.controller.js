@@ -1,6 +1,7 @@
 const { z } = require('zod');
 const prisma = require('../lib/prisma');
 const { AppError } = require('../middleware/errorHandler');
+const { outletScope } = require('../middleware/scope');
 const { cashSummary, heldBy } = require('../services/cash.service');
 
 const idParam = z.object({ id: z.coerce.number().int().positive() });
@@ -23,11 +24,11 @@ function format(d) {
 }
 
 async function overview(req, res) {
-  const isOwner = req.user.role === 'OWNER';
+  const { isOwner } = req.scope;
   const [summary, deposits] = await Promise.all([
-    cashSummary(req.user),
+    cashSummary(req.user, req.scope),
     prisma.cashDeposit.findMany({
-      where: isOwner ? {} : { cashierId: req.user.id },
+      where: isOwner ? outletScope(req.scope) : { cashierId: req.user.id },
       orderBy: { id: 'desc' },
       take: 50,
       include: { cashier: { select: { name: true } } },
@@ -36,8 +37,10 @@ async function overview(req, res) {
   res.json({ data: { summary, deposits: deposits.map(format) } });
 }
 
+// Hanya kasir; outlet dan usaha diambil dari akun kasir itu sendiri
 async function createDeposit(req, res) {
   const body = depositSchema.parse(req.body);
+  const { businessId, outletId } = req.scope;
 
   const dep = await prisma.$transaction(async (tx) => {
     const held = await heldBy(tx, req.user.id);
@@ -45,7 +48,13 @@ async function createDeposit(req, res) {
       throw new AppError(`Melebihi kas yang Anda pegang (Rp ${held})`, 400);
     }
     return tx.cashDeposit.create({
-      data: { cashierId: req.user.id, amount: body.amount, note: body.note || null },
+      data: {
+        businessId,
+        outletId,
+        cashierId: req.user.id,
+        amount: body.amount,
+        note: body.note || null,
+      },
       include: { cashier: { select: { name: true } } },
     });
   });
@@ -57,7 +66,7 @@ async function confirmDeposit(req, res) {
   const { id } = idParam.parse(req.params);
 
   const changed = await prisma.cashDeposit.updateMany({
-    where: { id, status: 'PENDING' },
+    where: { id, status: 'PENDING', ...outletScope(req.scope) },
     data: { status: 'CONFIRMED', confirmedAt: new Date(), confirmedById: req.user.id },
   });
   if (changed.count === 0) {

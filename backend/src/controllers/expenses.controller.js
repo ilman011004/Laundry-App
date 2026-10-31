@@ -1,6 +1,7 @@
 const { z } = require('zod');
 const prisma = require('../lib/prisma');
 const { AppError } = require('../middleware/errorHandler');
+const { outletScope, requireOutlet } = require('../middleware/scope');
 const t = require('../utils/time');
 
 const idParam = z.object({ id: z.coerce.number().int().positive() });
@@ -30,13 +31,15 @@ const listQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
 
-// Ubah "YYYY-MM-DD" (tanggal lokal) menjadi rentang [start, end)
-function dayRange(from, to) {
-  const start = from ? t.parseLocalDate(from) : null;
-  const end = to ? t.addDays(t.parseLocalDate(to), 1) : null;
+// Ubah "YYYY-MM-DD" (tanggal lokal usaha) menjadi rentang [start, end)
+function dayRange(from, to, tz) {
+  const start = from ? t.parseLocalDate(from, tz) : null;
+  const end = to ? t.addDays(t.parseLocalDate(to, tz), 1) : null;
 
-  if (from && t.dayKey(start) !== from) throw new AppError('Tanggal awal tidak valid', 400);
-  if (to && t.dayKey(t.addDays(end, -1)) !== to) throw new AppError('Tanggal akhir tidak valid', 400);
+  if (from && t.dayKey(start, tz) !== from) throw new AppError('Tanggal awal tidak valid', 400);
+  if (to && t.dayKey(t.addDays(end, -1), tz) !== to) {
+    throw new AppError('Tanggal akhir tidak valid', 400);
+  }
   if (start && end && end <= start) {
     throw new AppError('Tanggal akhir tidak boleh sebelum tanggal awal', 400);
   }
@@ -48,9 +51,12 @@ const withCreator = { createdBy: { select: { id: true, name: true } } };
 // ---------- Catat pengeluaran ----------
 async function create(req, res) {
   const body = createSchema.parse(req.body);
+  const outletId = requireOutlet(req.scope);
 
   const expense = await prisma.expense.create({
     data: {
+      businessId: req.scope.businessId,
+      outletId,
       category: body.category,
       description: body.description,
       amount: body.amount,
@@ -66,9 +72,9 @@ async function create(req, res) {
 // ---------- Daftar ----------
 async function list(req, res) {
   const q = listQuery.parse(req.query);
-  const { start, end } = dayRange(q.from, q.to);
+  const { start, end } = dayRange(q.from, q.to, req.scope.timezone);
 
-  const where = {};
+  const where = { ...outletScope(req.scope) };
   if (q.category) where.category = { equals: q.category, mode: 'insensitive' };
   if (start || end) {
     where.spentAt = {};
@@ -100,9 +106,10 @@ async function list(req, res) {
   });
 }
 
-// ---------- Daftar kategori yang pernah dipakai ----------
+// ---------- Daftar kategori yang pernah dipakai (seluruh usaha) ----------
 async function categories(req, res) {
   const rows = await prisma.expense.findMany({
+    where: { businessId: req.scope.businessId },
     distinct: ['category'],
     select: { category: true },
     orderBy: { category: 'asc' },
@@ -115,7 +122,10 @@ async function update(req, res) {
   const { id } = idParam.parse(req.params);
   const body = updateSchema.parse(req.body);
 
-  const exists = await prisma.expense.findUnique({ where: { id }, select: { id: true } });
+  const exists = await prisma.expense.findFirst({
+    where: { id, ...outletScope(req.scope) },
+    select: { id: true },
+  });
   if (!exists) throw new AppError('Pengeluaran tidak ditemukan', 404);
 
   const expense = await prisma.expense.update({
@@ -130,7 +140,10 @@ async function update(req, res) {
 async function remove(req, res) {
   const { id } = idParam.parse(req.params);
 
-  const exists = await prisma.expense.findUnique({ where: { id }, select: { id: true } });
+  const exists = await prisma.expense.findFirst({
+    where: { id, ...outletScope(req.scope) },
+    select: { id: true },
+  });
   if (!exists) throw new AppError('Pengeluaran tidak ditemukan', 404);
 
   await prisma.expense.delete({ where: { id } });

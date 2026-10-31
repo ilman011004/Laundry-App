@@ -1,43 +1,35 @@
 const prisma = require('../lib/prisma');
 const { cashSummary } = require('../services/cash.service');
-
-const HOUR = 3600 * 1000;
-const TZ = 8; // Asia/Makassar
-
-function startOfDayLocal(now = new Date()) {
-  const l = new Date(now.getTime() + TZ * HOUR);
-  return new Date(Date.UTC(l.getUTCFullYear(), l.getUTCMonth(), l.getUTCDate()) - TZ * HOUR);
-}
-
-function startOfMonthLocal(now = new Date()) {
-  const l = new Date(now.getTime() + TZ * HOUR);
-  return new Date(Date.UTC(l.getUTCFullYear(), l.getUTCMonth(), 1) - TZ * HOUR);
-}
+const { outletScope } = require('../middleware/scope');
+const t = require('../utils/time');
 
 const sum = (r) => r._sum.amount || 0;
 
 async function summary(req, res) {
-  const isOwner = req.user.role === 'OWNER';
+  const { isOwner, timezone: tz } = req.scope;
+  const sc = outletScope(req.scope);
   const now = new Date();
-  const dayStart = startOfDayLocal(now);
-  const monthStart = startOfMonthLocal(now);
+  const dayStart = t.startOfDay(now, tz);
+  const monthStart = t.startOfMonth(now, tz);
 
   const overdueWhere = {
+    ...sc,
     workStatus: { in: ['RECEIVED', 'WASHING', 'DRYING', 'IRONING'] },
     estimatedDoneAt: { lt: now },
   };
+  const unpaidWhere = { ...sc, workStatus: { not: 'CANCELLED' }, paymentStatus: { not: 'PAID' } };
 
   const [byStatus, completedToday, ordersToday, unpaid, overdue, overdueList, topDebts, cash] =
     await Promise.all([
-      prisma.order.groupBy({ by: ['workStatus'], _count: { _all: true } }),
+      prisma.order.groupBy({ by: ['workStatus'], where: sc, _count: { _all: true } }),
       prisma.order.count({
-        where: { workStatus: 'COMPLETED', completedAt: { gte: dayStart } },
+        where: { ...sc, workStatus: 'COMPLETED', completedAt: { gte: dayStart } },
       }),
       prisma.order.count({
-        where: { createdAt: { gte: dayStart }, workStatus: { not: 'CANCELLED' } },
+        where: { ...sc, createdAt: { gte: dayStart }, workStatus: { not: 'CANCELLED' } },
       }),
       prisma.order.aggregate({
-        where: { workStatus: { not: 'CANCELLED' }, paymentStatus: { not: 'PAID' } },
+        where: unpaidWhere,
         _count: { _all: true },
         _sum: { total: true, paidAmount: true },
       }),
@@ -55,7 +47,7 @@ async function summary(req, res) {
         },
       }),
       prisma.order.findMany({
-        where: { workStatus: { not: 'CANCELLED' }, paymentStatus: { not: 'PAID' } },
+        where: unpaidWhere,
         select: {
           id: true,
           orderNumber: true,
@@ -66,7 +58,7 @@ async function summary(req, res) {
         orderBy: { createdAt: 'asc' },
         take: 50,
       }),
-      cashSummary(req.user),
+      cashSummary(req.user, req.scope),
     ]);
 
   const count = (s) => byStatus.find((x) => x.workStatus === s)?._count._all || 0;
@@ -102,14 +94,25 @@ async function summary(req, res) {
     cash,
   };
 
-  // Omzet dan uang masuk hanya untuk Pemilik
+  // Omzet dan uang masuk hanya untuk Pemilik.
+  // transfer dan qris sengaja kumulatif (saldo non-tunai), sama seperti kas.
   if (isOwner) {
+    const paid = { order: sc };
     const [transfer, qris, incToday, incMonth, expMonth] = await Promise.all([
-      prisma.payment.aggregate({ where: { method: 'TRANSFER' }, _sum: { amount: true } }),
-      prisma.payment.aggregate({ where: { method: 'QRIS' }, _sum: { amount: true } }),
-      prisma.payment.aggregate({ where: { paidAt: { gte: dayStart } }, _sum: { amount: true } }),
-      prisma.payment.aggregate({ where: { paidAt: { gte: monthStart } }, _sum: { amount: true } }),
-      prisma.expense.aggregate({ where: { spentAt: { gte: monthStart } }, _sum: { amount: true } }),
+      prisma.payment.aggregate({ where: { ...paid, method: 'TRANSFER' }, _sum: { amount: true } }),
+      prisma.payment.aggregate({ where: { ...paid, method: 'QRIS' }, _sum: { amount: true } }),
+      prisma.payment.aggregate({
+        where: { ...paid, paidAt: { gte: dayStart } },
+        _sum: { amount: true },
+      }),
+      prisma.payment.aggregate({
+        where: { ...paid, paidAt: { gte: monthStart } },
+        _sum: { amount: true },
+      }),
+      prisma.expense.aggregate({
+        where: { ...sc, spentAt: { gte: monthStart } },
+        _sum: { amount: true },
+      }),
     ]);
 
     data.money = {

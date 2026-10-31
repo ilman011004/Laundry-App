@@ -1,6 +1,7 @@
 const { z } = require('zod');
 const prisma = require('../lib/prisma');
 const { AppError } = require('../middleware/errorHandler');
+const { outletScope } = require('../middleware/scope');
 
 const idParam = z.object({ id: z.coerce.number().int().positive() });
 const addressParam = z.object({
@@ -56,18 +57,25 @@ const listQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
 
+// Pelanggan milik usaha (dipakai bersama semua outlet). Selalu cek lewat fungsi ini.
+async function ownCustomer(businessId, id) {
+  const customer = await prisma.customer.findFirst({ where: { id, businessId } });
+  if (!customer) throw new AppError('Pelanggan tidak ditemukan', 404);
+  return customer;
+}
+
 // ---------- Daftar + pencarian ----------
 async function list(req, res) {
   const { search, page, limit } = listQuery.parse(req.query);
+  const { businessId } = req.scope;
 
-  const where = search
-    ? {
-        OR: [
-          { name: { contains: search, mode: 'insensitive' } },
-          { phone: { contains: normalizePhone(search) } },
-        ],
-      }
-    : {};
+  const where = { businessId };
+  if (search) {
+    where.OR = [
+      { name: { contains: search, mode: 'insensitive' } },
+      { phone: { contains: normalizePhone(search) } },
+    ];
+  }
 
   const [total, data] = await Promise.all([
     prisma.customer.count({ where }),
@@ -79,7 +87,11 @@ async function list(req, res) {
       include: {
         addresses: { where: { isDefault: true }, take: 1 },
         _count: {
-          select: { orders: { where: { workStatus: { not: 'CANCELLED' } } } },
+          select: {
+            orders: {
+              where: { ...outletScope(req.scope), workStatus: { not: 'CANCELLED' } },
+            },
+          },
         },
       },
     }),
@@ -94,23 +106,32 @@ async function list(req, res) {
 // ---------- Tambah ----------
 async function create(req, res) {
   const body = createSchema.parse(req.body);
+  const { businessId } = req.scope;
 
-  const exists = await prisma.customer.findUnique({ where: { phone: body.phone } });
+  const exists = await prisma.customer.findFirst({ where: { businessId, phone: body.phone } });
   if (exists) {
     throw new AppError('Nomor HP sudah terdaftar', 409, { customerId: exists.id });
   }
 
-  const customer = await prisma.customer.create({
-    data: {
-      name: body.name,
-      phone: body.phone,
-      notes: body.notes,
-      addresses: body.address
-        ? { create: { ...body.address, isDefault: true } }
-        : undefined,
-    },
-    include: { addresses: true },
-  });
+  let customer;
+  try {
+    customer = await prisma.customer.create({
+      data: {
+        businessId,
+        name: body.name,
+        phone: body.phone,
+        notes: body.notes,
+        addresses: body.address
+          ? { create: { ...body.address, isDefault: true } }
+          : undefined,
+      },
+      include: { addresses: true },
+    });
+  } catch (e) {
+    // Sementara: keunikan di database masih global (diubah di 18c-4)
+    if (e.code === 'P2002') throw new AppError('Nomor HP sudah terdaftar', 409);
+    throw e;
+  }
 
   res.status(201).json({ data: customer });
 }
@@ -118,16 +139,19 @@ async function create(req, res) {
 // ---------- Detail ----------
 async function detail(req, res) {
   const { id } = idParam.parse(req.params);
+  const { businessId } = req.scope;
+  const oScope = outletScope(req.scope);
 
-  const customer = await prisma.customer.findUnique({
-    where: { id },
+  await ownCustomer(businessId, id);
+
+  const customer = await prisma.customer.findFirst({
+    where: { id, businessId },
     include: { addresses: { orderBy: [{ isDefault: 'desc' }, { id: 'asc' }] } },
   });
-  if (!customer) throw new AppError('Pelanggan tidak ditemukan', 404);
 
   // Pesanan aktif (belum selesai / belum dibatalkan)
   const activeOrders = await prisma.order.findMany({
-    where: { customerId: id, workStatus: { notIn: ['COMPLETED', 'CANCELLED'] } },
+    where: { ...oScope, customerId: id, workStatus: { notIn: ['COMPLETED', 'CANCELLED'] } },
     orderBy: { createdAt: 'desc' },
     select: {
       id: true,
@@ -142,13 +166,18 @@ async function detail(req, res) {
 
   // Total tagihan: sisa bayar semua pesanan yang tidak dibatalkan
   const unpaid = await prisma.order.findMany({
-    where: { customerId: id, workStatus: { not: 'CANCELLED' }, paymentStatus: { not: 'PAID' } },
+    where: {
+      ...oScope,
+      customerId: id,
+      workStatus: { not: 'CANCELLED' },
+      paymentStatus: { not: 'PAID' },
+    },
     select: { total: true, paidAmount: true },
   });
   const outstanding = unpaid.reduce((sum, o) => sum + (o.total - o.paidAmount), 0);
 
   const stats = await prisma.order.aggregate({
-    where: { customerId: id, workStatus: { not: 'CANCELLED' } },
+    where: { ...oScope, customerId: id, workStatus: { not: 'CANCELLED' } },
     _count: true,
     _sum: { total: true },
   });
@@ -170,16 +199,22 @@ async function detail(req, res) {
 async function update(req, res) {
   const { id } = idParam.parse(req.params);
   const body = updateSchema.parse(req.body);
+  const { businessId } = req.scope;
 
-  const current = await prisma.customer.findUnique({ where: { id } });
-  if (!current) throw new AppError('Pelanggan tidak ditemukan', 404);
+  const current = await ownCustomer(businessId, id);
 
   if (body.phone && body.phone !== current.phone) {
-    const dup = await prisma.customer.findUnique({ where: { phone: body.phone } });
+    const dup = await prisma.customer.findFirst({ where: { businessId, phone: body.phone } });
     if (dup) throw new AppError('Nomor HP sudah dipakai pelanggan lain', 409);
   }
 
-  const customer = await prisma.customer.update({ where: { id }, data: body });
+  let customer;
+  try {
+    customer = await prisma.customer.update({ where: { id }, data: body });
+  } catch (e) {
+    if (e.code === 'P2002') throw new AppError('Nomor HP sudah dipakai pelanggan lain', 409);
+    throw e;
+  }
   res.json({ data: customer });
 }
 
@@ -188,8 +223,7 @@ async function addAddress(req, res) {
   const { id } = idParam.parse(req.params);
   const body = addressSchema.parse(req.body);
 
-  const customer = await prisma.customer.findUnique({ where: { id } });
-  if (!customer) throw new AppError('Pelanggan tidak ditemukan', 404);
+  await ownCustomer(req.scope.businessId, id);
 
   const count = await prisma.customerAddress.count({ where: { customerId: id } });
   // Alamat pertama otomatis jadi utama
@@ -213,6 +247,8 @@ async function addAddress(req, res) {
 async function updateAddress(req, res) {
   const { id, addressId } = addressParam.parse(req.params);
   const body = updateAddressSchema.parse(req.body);
+
+  await ownCustomer(req.scope.businessId, id);
 
   const existing = await prisma.customerAddress.findFirst({
     where: { id: addressId, customerId: id },
@@ -239,6 +275,8 @@ async function updateAddress(req, res) {
 
 async function removeAddress(req, res) {
   const { id, addressId } = addressParam.parse(req.params);
+
+  await ownCustomer(req.scope.businessId, id);
 
   const existing = await prisma.customerAddress.findFirst({
     where: { id: addressId, customerId: id },

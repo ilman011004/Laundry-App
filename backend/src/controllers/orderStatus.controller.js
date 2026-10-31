@@ -1,6 +1,7 @@
 const { z } = require('zod');
 const prisma = require('../lib/prisma');
 const { AppError } = require('../middleware/errorHandler');
+const { outletScope } = require('../middleware/scope');
 
 const idParam = z.object({ id: z.coerce.number().int().positive() });
 
@@ -30,10 +31,11 @@ const orderSummary = {
 async function update(req, res) {
   const { id } = idParam.parse(req.params);
   const body = statusSchema.parse(req.body);
+  const sc = outletScope(req.scope);
 
   const order = await prisma.$transaction(async (tx) => {
-    const current = await tx.order.findUnique({
-      where: { id },
+    const current = await tx.order.findFirst({
+      where: { id, ...sc },
       select: { workStatus: true },
     });
     if (!current) throw new AppError('Pesanan tidak ditemukan', 404);
@@ -53,7 +55,7 @@ async function update(req, res) {
 
     // Jaga dari perubahan bersamaan oleh dua orang
     const changed = await tx.order.updateMany({
-      where: { id, workStatus: from },
+      where: { id, ...sc, workStatus: from },
       data: {
         workStatus: to,
         ...(to === 'COMPLETED' ? { completedAt: new Date() } : {}),
@@ -89,10 +91,11 @@ async function update(req, res) {
 async function cancel(req, res) {
   const { id } = idParam.parse(req.params);
   const body = cancelSchema.parse(req.body);
+  const sc = outletScope(req.scope);
 
   const order = await prisma.$transaction(async (tx) => {
-    const current = await tx.order.findUnique({
-      where: { id },
+    const current = await tx.order.findFirst({
+      where: { id, ...sc },
       select: { workStatus: true, paidAmount: true },
     });
     if (!current) throw new AppError('Pesanan tidak ditemukan', 404);
@@ -109,7 +112,7 @@ async function cancel(req, res) {
     }
 
     const changed = await tx.order.updateMany({
-      where: { id, workStatus: current.workStatus },
+      where: { id, ...sc, workStatus: current.workStatus },
       data: { workStatus: 'CANCELLED' },
     });
     if (changed.count === 0) {

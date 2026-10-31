@@ -1,6 +1,7 @@
 const { z } = require('zod');
 const prisma = require('../lib/prisma');
 const { AppError } = require('../middleware/errorHandler');
+const { outletScope } = require('../middleware/scope');
 const t = require('../utils/time');
 
 const idParam = z.object({ id: z.coerce.number().int().positive() });
@@ -71,19 +72,20 @@ const listQuery = z.object({
 });
 
 // ---------- Fungsi bantu ----------
-function checkSchedule(date) {
-  if (date && date < t.startOfDay()) {
+function checkSchedule(date, tz) {
+  if (date && date < t.startOfDay(new Date(), tz)) {
     throw new AppError('Jadwal tidak boleh sebelum hari ini', 400);
   }
 }
 
-async function checkCourier(courierId) {
+// Kurir harus akun aktif milik usaha yang sama
+async function checkCourier(courierId, businessId) {
   if (!courierId) return;
-  const u = await prisma.user.findUnique({
-    where: { id: courierId },
-    select: { id: true, isActive: true },
+  const u = await prisma.user.findFirst({
+    where: { id: courierId, businessId, isActive: true },
+    select: { id: true },
   });
-  if (!u || !u.isActive) throw new AppError('Kurir tidak ditemukan atau tidak aktif', 400);
+  if (!u) throw new AppError('Kurir tidak ditemukan atau tidak aktif', 400);
 }
 
 // Alamat dari addressId, teks manual, atau (jika useDefault) alamat default pelanggan
@@ -113,9 +115,10 @@ async function resolveAddress(customerId, input, useDefault) {
 // ---------- Jadwalkan ----------
 async function create(req, res) {
   const body = createSchema.parse(req.body);
+  const { businessId, timezone } = req.scope;
 
-  const order = await prisma.order.findUnique({
-    where: { id: body.orderId },
+  const order = await prisma.order.findFirst({
+    where: { id: body.orderId, ...outletScope(req.scope) },
     select: { id: true, customerId: true, workStatus: true, receiveMethod: true },
   });
   if (!order) throw new AppError('Pesanan tidak ditemukan', 404);
@@ -138,8 +141,8 @@ async function create(req, res) {
     throw new AppError(`Jadwal ${TYPE_LABEL[body.type]} untuk pesanan ini sudah ada`, 409);
   }
 
-  checkSchedule(body.scheduledAt);
-  await checkCourier(body.courierId);
+  checkSchedule(body.scheduledAt, timezone);
+  await checkCourier(body.courierId, businessId);
   const addressSnapshot = await resolveAddress(order.customerId, body, true);
 
   const delivery = await prisma.delivery.create({
@@ -160,18 +163,19 @@ async function create(req, res) {
 // ---------- Daftar ----------
 async function list(req, res) {
   const q = listQuery.parse(req.query);
+  const tz = req.scope.timezone;
 
-  const where = {};
+  const where = { order: outletScope(req.scope) };
   if (q.status) where.status = q.status;
   if (q.type) where.type = q.type;
   if (q.courierId) where.courierId = q.courierId;
   if (q.orderId) where.orderId = q.orderId;
 
   if (q.from || q.to) {
-    const start = q.from ? t.parseLocalDate(q.from) : null;
-    const end = q.to ? t.addDays(t.parseLocalDate(q.to), 1) : null;
-    if (q.from && t.dayKey(start) !== q.from) throw new AppError('Tanggal awal tidak valid', 400);
-    if (q.to && t.dayKey(t.addDays(end, -1)) !== q.to) {
+    const start = q.from ? t.parseLocalDate(q.from, tz) : null;
+    const end = q.to ? t.addDays(t.parseLocalDate(q.to, tz), 1) : null;
+    if (q.from && t.dayKey(start, tz) !== q.from) throw new AppError('Tanggal awal tidak valid', 400);
+    if (q.to && t.dayKey(t.addDays(end, -1), tz) !== q.to) {
       throw new AppError('Tanggal akhir tidak valid', 400);
     }
     where.scheduledAt = {};
@@ -199,7 +203,10 @@ async function list(req, res) {
 // ---------- Detail ----------
 async function detail(req, res) {
   const { id } = idParam.parse(req.params);
-  const delivery = await prisma.delivery.findUnique({ where: { id }, include: deliveryInclude });
+  const delivery = await prisma.delivery.findFirst({
+    where: { id, order: outletScope(req.scope) },
+    include: deliveryInclude,
+  });
   if (!delivery) throw new AppError('Pengantaran tidak ditemukan', 404);
   res.json({ data: delivery });
 }
@@ -208,9 +215,10 @@ async function detail(req, res) {
 async function update(req, res) {
   const { id } = idParam.parse(req.params);
   const body = updateSchema.parse(req.body);
+  const { businessId, timezone } = req.scope;
 
-  const current = await prisma.delivery.findUnique({
-    where: { id },
+  const current = await prisma.delivery.findFirst({
+    where: { id, order: outletScope(req.scope) },
     select: { status: true, order: { select: { customerId: true } } },
   });
   if (!current) throw new AppError('Pengantaran tidak ditemukan', 404);
@@ -218,8 +226,8 @@ async function update(req, res) {
     throw new AppError('Hanya jadwal berstatus SCHEDULED yang bisa diubah', 409);
   }
 
-  checkSchedule(body.scheduledAt);
-  await checkCourier(body.courierId || undefined);
+  checkSchedule(body.scheduledAt, timezone);
+  await checkCourier(body.courierId || undefined, businessId);
   const addressSnapshot = await resolveAddress(current.order.customerId, body, false);
 
   const data = {};
@@ -242,7 +250,10 @@ async function setStatus(req, res) {
   const { id } = idParam.parse(req.params);
   const body = statusSchema.parse(req.body);
 
-  const current = await prisma.delivery.findUnique({ where: { id }, select: { status: true } });
+  const current = await prisma.delivery.findFirst({
+    where: { id, order: outletScope(req.scope) },
+    select: { status: true },
+  });
   if (!current) throw new AppError('Pengantaran tidak ditemukan', 404);
 
   if (!TRANSITIONS[current.status].includes(body.status)) {

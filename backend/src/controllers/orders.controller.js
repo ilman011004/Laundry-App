@@ -2,7 +2,8 @@ const { z } = require('zod');
 const prisma = require('../lib/prisma');
 const { AppError } = require('../middleware/errorHandler');
 const { calculate } = require('../services/pricing.service');
-const { TZ_OFFSET_HOURS } = require('../utils/time');
+const { outletScope, requireOutlet } = require('../middleware/scope');
+const t = require('../utils/time');
 
 const idParam = z.object({ id: z.coerce.number().int().positive() });
 
@@ -52,13 +53,12 @@ const orderInclude = {
   },
 };
 
-// Nomor order: LDR-YYMMDD-0001 (urut per hari, mengikuti zona waktu di utils/time.js)
-async function generateOrderNumber(tx) {
-  const now = new Date(Date.now() + TZ_OFFSET_HOURS * 3600 * 1000);
-  const yy = String(now.getUTCFullYear()).slice(2);
-  const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
-  const dd = String(now.getUTCDate()).padStart(2, '0');
-  const prefix = `LDR-${yy}${mm}${dd}-`;
+// Nomor order: LDR-YYMMDD-0001 (urut per hari, tanggal mengikuti zona waktu usaha).
+// Sementara urutannya masih global lintas usaha karena nomor pesanan masih unik global;
+// jadi per usaha di 18c-4.
+async function generateOrderNumber(tx, tz) {
+  const key = t.dayKey(new Date(), tz); // "2026-10-31"
+  const prefix = `LDR-${key.slice(2, 4)}${key.slice(5, 7)}${key.slice(8, 10)}-`;
 
   const last = await tx.order.findFirst({
     where: { orderNumber: { startsWith: prefix } },
@@ -72,7 +72,7 @@ async function generateOrderNumber(tx) {
 // ---------- Preview ----------
 async function preview(req, res) {
   const body = orderInputSchema.parse(req.body);
-  const result = await calculate(body);
+  const result = await calculate(body, req.scope.businessId);
 
   let estimatedDoneAt = null;
   if (result.speed && result.speed.hours) {
@@ -86,11 +86,16 @@ async function create(req, res) {
   const body = orderInputSchema.parse(req.body);
   if (!body.customerId) throw new AppError('Pelanggan wajib dipilih', 422);
 
-  const customer = await prisma.customer.findUnique({ where: { id: body.customerId } });
+  const { businessId, timezone } = req.scope;
+  const outletId = requireOutlet(req.scope);
+
+  const customer = await prisma.customer.findFirst({
+    where: { id: body.customerId, businessId },
+  });
   if (!customer) throw new AppError('Pelanggan tidak ditemukan', 404);
 
   // Harga dihitung ulang di server, angka dari klien tidak dipercaya
-  const calc = await calculate(body);
+  const calc = await calculate(body, businessId);
 
   const receivedAt = new Date();
   const estimatedDoneAt =
@@ -103,11 +108,13 @@ async function create(req, res) {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       order = await prisma.$transaction(async (tx) => {
-        const orderNumber = await generateOrderNumber(tx);
+        const orderNumber = await generateOrderNumber(tx, timezone);
 
         return tx.order.create({
           data: {
             orderNumber,
+            businessId,
+            outletId,
             customerId: body.customerId,
             createdById: req.user.id,
             receiveMethod: calc.fulfillment ? calc.fulfillment.receiveMethod : 'SELF_PICKUP',
@@ -156,21 +163,14 @@ async function create(req, res) {
   res.status(201).json({ data: order });
 }
 
-// Awal hari ini menurut waktu usaha (Asia/Makassar, UTC+8)
-function startOfDayLocal() {
-  const H = 3600 * 1000;
-  const l = new Date(Date.now() + 8 * H);
-  return new Date(Date.UTC(l.getUTCFullYear(), l.getUTCMonth(), l.getUTCDate()) - 8 * H);
-}
-
-function viewCondition(view) {
+function viewCondition(view, tz) {
   switch (view) {
     case 'inProgress':
       return { workStatus: { in: ['RECEIVED', 'WASHING', 'DRYING', 'IRONING'] } };
     case 'ready':
       return { workStatus: 'READY' };
     case 'completedToday':
-      return { workStatus: 'COMPLETED', completedAt: { gte: startOfDayLocal() } };
+      return { workStatus: 'COMPLETED', completedAt: { gte: t.startOfDay(new Date(), tz) } };
     case 'unpaid':
       return { workStatus: { not: 'CANCELLED' }, paymentStatus: { not: 'PAID' } };
     default:
@@ -178,12 +178,12 @@ function viewCondition(view) {
   }
 }
 
-
 // ---------- Daftar ----------
 async function list(req, res) {
   const q = listQuery.parse(req.query);
 
-  const where = {};
+  // Kasir: hanya outlet sendiri. Owner: outlet terpilih, atau semua outlet usahanya.
+  const where = { ...outletScope(req.scope) };
   if (q.workStatus) where.workStatus = q.workStatus;
   if (q.paymentStatus) where.paymentStatus = q.paymentStatus;
   if (q.customerId) where.customerId = q.customerId;
@@ -192,7 +192,7 @@ async function list(req, res) {
     if (q.from) where.createdAt.gte = q.from;
     if (q.to) where.createdAt.lte = q.to;
   }
-  const vc = viewCondition(q.view);
+  const vc = viewCondition(q.view, req.scope.timezone);
   if (vc) where.AND = [vc];
   if (q.search) {
     where.OR = [
@@ -212,6 +212,7 @@ async function list(req, res) {
       select: {
         id: true,
         orderNumber: true,
+        outletId: true,
         workStatus: true,
         paymentStatus: true,
         receiveMethod: true,
@@ -234,7 +235,10 @@ async function list(req, res) {
 // ---------- Detail ----------
 async function detail(req, res) {
   const { id } = idParam.parse(req.params);
-  const order = await prisma.order.findUnique({ where: { id }, include: orderInclude });
+  const order = await prisma.order.findFirst({
+    where: { id, ...outletScope(req.scope) },
+    include: orderInclude,
+  });
   if (!order) throw new AppError('Pesanan tidak ditemukan', 404);
 
   res.json({ data: { ...order, remaining: order.total - order.paidAmount } });

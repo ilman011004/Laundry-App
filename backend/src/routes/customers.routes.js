@@ -1,8 +1,9 @@
 const router = require('express').Router();
 const ctrl = require('../controllers/customers.controller');
 const { authenticate, authorize } = require('../middleware/auth');
+const { resolveScope } = require('../middleware/scope');
 
-router.use(authenticate, authorize('OWNER', 'CASHIER'));
+router.use(authenticate, authorize('OWNER', 'CASHIER'), resolveScope);
 
 router.get('/', ctrl.list);
 router.post('/', ctrl.create);

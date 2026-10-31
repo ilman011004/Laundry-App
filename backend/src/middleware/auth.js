@@ -1,4 +1,4 @@
-const prisma = require('../lib/prisma');
+﻿const prisma = require('../lib/prisma');
 const { AppError } = require('./errorHandler');
 const { verifyAccessToken } = require('../utils/jwt');
 
@@ -21,7 +21,7 @@ async function authenticate(req, res, next) {
   // Cek ke database supaya akun yang dinonaktifkan langsung tidak bisa dipakai
   const user = await prisma.user.findUnique({
     where: { id: Number(payload.sub) },
-        include: {
+    include: {
       role: true,
       outlet: { select: { isActive: true } },
       business: { select: { timezone: true } },
@@ -42,7 +42,7 @@ async function authenticate(req, res, next) {
     role: user.role.name,
     businessId: user.businessId,
     outletId: user.outletId,
-        timezone: user.business ? user.business.timezone : null,
+    timezone: user.business ? user.business.timezone : null,
   };
   next();
 }

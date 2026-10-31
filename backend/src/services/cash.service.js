@@ -1,15 +1,26 @@
 const prisma = require('../lib/prisma');
+const { outletScope } = require('../middleware/scope');
 
-// Kas tiap pengguna: tunai yang diterima dikurangi setoran
-async function perUser() {
+// Kas tiap pengguna dalam lingkup (usaha, dan outlet bila dipilih):
+// tunai yang diterima dikurangi setoran
+async function perUser(scope) {
+  const sc = outletScope(scope);
+
   const [paid, dep, users] = await Promise.all([
     prisma.payment.groupBy({
       by: ['receivedById'],
-      where: { method: 'CASH' },
+      where: { method: 'CASH', order: sc },
       _sum: { amount: true },
     }),
-    prisma.cashDeposit.groupBy({ by: ['cashierId'], _sum: { amount: true } }),
+    prisma.cashDeposit.groupBy({ by: ['cashierId'], where: sc, _sum: { amount: true } }),
     prisma.user.findMany({
+      where: {
+        businessId: scope.businessId,
+        // Bila satu outlet dipilih: kasir outlet itu dan akun pemilik
+        ...(scope.outletId
+          ? { OR: [{ outletId: scope.outletId }, { role: { name: 'OWNER' } }] }
+          : {}),
+      },
       select: { id: true, name: true, isActive: true, role: { select: { name: true } } },
     }),
   ]);
@@ -31,7 +42,8 @@ async function perUser() {
   });
 }
 
-// Kas yang dipegang satu pengguna (db bisa prisma atau transaksi)
+// Kas yang dipegang satu pengguna (db bisa prisma atau transaksi).
+// Aman tanpa filter usaha karena userId selalu berasal dari token.
 async function heldBy(db, userId) {
   const [paid, dep] = await Promise.all([
     db.payment.aggregate({
@@ -43,7 +55,7 @@ async function heldBy(db, userId) {
   return (paid._sum.amount || 0) - (dep._sum.amount || 0);
 }
 
-async function cashSummary(user) {
+async function cashSummary(user, scope) {
   if (user.role !== 'OWNER') {
     const [held, pending] = await Promise.all([
       heldBy(prisma, user.id),
@@ -55,15 +67,17 @@ async function cashSummary(user) {
     return { held, pendingDeposits: pending._sum.amount || 0 };
   }
 
+  const sc = outletScope(scope);
+
   const [rows, expenses, confirmed, pending] = await Promise.all([
-    perUser(),
-    prisma.expense.aggregate({ _sum: { amount: true } }),
+    perUser(scope),
+    prisma.expense.aggregate({ where: sc, _sum: { amount: true } }),
     prisma.cashDeposit.aggregate({
-      where: { status: 'CONFIRMED' },
+      where: { ...sc, status: 'CONFIRMED' },
       _sum: { amount: true },
     }),
     prisma.cashDeposit.aggregate({
-      where: { status: 'PENDING' },
+      where: { ...sc, status: 'PENDING' },
       _sum: { amount: true },
       _count: { _all: true },
     }),
