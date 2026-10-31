@@ -21,11 +21,18 @@ async function authenticate(req, res, next) {
   // Cek ke database supaya akun yang dinonaktifkan langsung tidak bisa dipakai
   const user = await prisma.user.findUnique({
     where: { id: Number(payload.sub) },
-    include: { role: true },
+        include: {
+      role: true,
+      outlet: { select: { isActive: true } },
+      business: { select: { timezone: true } },
+    },
   });
 
   if (!user || !user.isActive) {
     throw new AppError('Akun tidak ditemukan atau nonaktif', 401);
+  }
+  if (user.outlet && !user.outlet.isActive) {
+    throw new AppError('Outlet Anda dinonaktifkan. Hubungi pemilik.', 403);
   }
 
   req.user = {
@@ -33,6 +40,9 @@ async function authenticate(req, res, next) {
     name: user.name,
     username: user.username,
     role: user.role.name,
+    businessId: user.businessId,
+    outletId: user.outletId,
+        timezone: user.business ? user.business.timezone : null,
   };
   next();
 }

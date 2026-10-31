@@ -66,6 +66,63 @@ enum DeliveryStatus {
   CANCELLED
 }
 
+enum DepositStatus {
+  PENDING
+  CONFIRMED
+}
+
+enum PhotoKind {
+  RECEIVED
+  READY
+}
+
+// ======================= USAHA & OUTLET =======================
+
+model Business {
+  id        Int      @id @default(autoincrement())
+  name      String
+  code      String   @unique
+  address   String   @default("")
+  phone     String   @default("")
+  timezone  String   @default("Asia/Jakarta")
+  
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  outlets        Outlet[]
+  users          User[]
+  customers      Customer[]
+  services       Service[]
+  serviceOptions ServiceOption[]
+  orders         Order[]
+  expenses       Expense[]
+  deposits       CashDeposit[]
+
+  @@map("businesses")
+}
+
+model Outlet {
+  id           Int      @id @default(autoincrement())
+  businessId   Int      @map("business_id")
+  name         String
+  address      String   @default("")
+  phone        String   @default("")
+  openingHours Json?    @map("opening_hours")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  business Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  users    User[]
+  orders   Order[]
+  expenses Expense[]
+  deposits CashDeposit[]
+
+  @@unique([businessId, name])
+  @@index([businessId])
+  @@map("outlets")
+}
+
 // ======================= AKUN =======================
 
 model Role {
@@ -80,38 +137,49 @@ model User {
   id           Int      @id @default(autoincrement())
   name         String
   username     String   @unique
+  email        String?  @unique
   passwordHash String   @map("password_hash")
   roleId       Int      @map("role_id")
+  businessId   Int?     @map("business_id")
+  outletId     Int?     @map("outlet_id")
   isActive     Boolean  @default(true) @map("is_active")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
+
+  role     Role      @relation(fields: [roleId], references: [id])
+  business Business? @relation(fields: [businessId], references: [id])
+  outlet   Outlet?   @relation(fields: [outletId], references: [id])
+
+  orders            Order[]
+  statusChanges     OrderStatusHistory[]
+  payments          Payment[]
+  expenses          Expense[]
+  deliveries        Delivery[]
   photos            OrderPhoto[]
+  deposits          CashDeposit[]        @relation("DepositCashier")
+  confirmedDeposits CashDeposit[]        @relation("DepositConfirmer")
 
-  role          Role                 @relation(fields: [roleId], references: [id])
-  orders        Order[]
-  statusChanges OrderStatusHistory[]
-  payments      Payment[]
-  expenses      Expense[]
-  deliveries    Delivery[]
-  deposits          CashDeposit[] @relation("DepositCashier")
-  confirmedDeposits CashDeposit[] @relation("DepositConfirmer")
-
+  @@index([businessId])
+  @@index([outletId])
   @@map("users")
 }
 
 // ======================= PELANGGAN =======================
 
 model Customer {
-  id        Int      @id @default(autoincrement())
-  name      String
-  phone     String   @unique
-  notes     String?
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id         Int      @id @default(autoincrement())
+  businessId Int?     @map("business_id")
+  name       String
+  phone      String   @unique
+  notes      String?
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
 
+  business  Business?         @relation(fields: [businessId], references: [id])
   addresses CustomerAddress[]
   orders    Order[]
 
+  @@index([businessId])
   @@map("customers")
 }
 
@@ -134,6 +202,7 @@ model CustomerAddress {
 
 model Service {
   id          Int         @id @default(autoincrement())
+  businessId  Int?        @map("business_id")
   name        String      @unique
   pricingType PricingType @map("pricing_type")
   price       Int
@@ -142,13 +211,16 @@ model Service {
   createdAt   DateTime    @default(now()) @map("created_at")
   updatedAt   DateTime    @updatedAt @map("updated_at")
 
+  business   Business?   @relation(fields: [businessId], references: [id])
   orderItems OrderItem[]
 
+  @@index([businessId])
   @@map("services")
 }
 
 model ServiceOption {
   id            Int        @id @default(autoincrement())
+  businessId    Int?       @map("business_id")
   type          OptionType
   name          String
   priceMode     PriceMode  @default(FIXED) @map("price_mode")
@@ -159,7 +231,10 @@ model ServiceOption {
   createdAt     DateTime   @default(now()) @map("created_at")
   updatedAt     DateTime   @updatedAt @map("updated_at")
 
+  business Business? @relation(fields: [businessId], references: [id])
+
   @@unique([type, name])
+  @@index([businessId])
   @@map("service_options")
 }
 
@@ -168,6 +243,8 @@ model ServiceOption {
 model Order {
   id          Int    @id @default(autoincrement())
   orderNumber String @unique @map("order_number")
+  businessId  Int?   @map("business_id")
+  outletId    Int?   @map("outlet_id")
   customerId  Int    @map("customer_id")
   createdById Int    @map("created_by_id")
 
@@ -194,6 +271,8 @@ model Order {
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt @map("updated_at")
 
+  business   Business?            @relation(fields: [businessId], references: [id])
+  outlet     Outlet?              @relation(fields: [outletId], references: [id])
   customer   Customer             @relation(fields: [customerId], references: [id])
   createdBy  User                 @relation(fields: [createdById], references: [id])
   items      OrderItem[]
@@ -202,6 +281,8 @@ model Order {
   deliveries Delivery[]
   photos     OrderPhoto[]
 
+  @@index([businessId])
+  @@index([outletId])
   @@index([customerId])
   @@index([workStatus])
   @@index([paymentStatus])
@@ -231,9 +312,9 @@ model OrderItem {
 }
 
 model OrderItemAddon {
-  id          Int       @id @default(autoincrement())
-  orderItemId Int       @map("order_item_id")
-  optionId    Int?      @map("option_id")
+  id          Int  @id @default(autoincrement())
+  orderItemId Int  @map("order_item_id")
+  optionId    Int? @map("option_id")
 
   name      String
   priceMode PriceMode @map("price_mode")
@@ -260,6 +341,23 @@ model OrderStatusHistory {
 
   @@index([orderId])
   @@map("order_status_history")
+}
+
+model OrderPhoto {
+  id           Int       @id @default(autoincrement())
+  orderId      Int       @map("order_id")
+  kind         PhotoKind
+  filename     String
+  mimeType     String    @map("mime_type")
+  sizeBytes    Int       @map("size_bytes")
+  uploadedById Int       @map("uploaded_by_id")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  order      Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  uploadedBy User  @relation(fields: [uploadedById], references: [id])
+
+  @@index([orderId])
+  @@map("order_photos")
 }
 
 // ======================= PEMBAYARAN & PENGANTARAN =======================
@@ -300,10 +398,12 @@ model Delivery {
   @@map("deliveries")
 }
 
-// ======================= PENGELUARAN =======================
+// ======================= PENGELUARAN & KAS =======================
 
 model Expense {
   id          Int      @id @default(autoincrement())
+  businessId  Int?     @map("business_id")
+  outletId    Int?     @map("outlet_id")
   category    String
   description String?
   amount      Int
@@ -311,19 +411,20 @@ model Expense {
   createdById Int      @map("created_by_id")
   createdAt   DateTime @default(now()) @map("created_at")
 
-  createdBy User @relation(fields: [createdById], references: [id])
+  business  Business? @relation(fields: [businessId], references: [id])
+  outlet    Outlet?   @relation(fields: [outletId], references: [id])
+  createdBy User      @relation(fields: [createdById], references: [id])
 
+  @@index([businessId])
+  @@index([outletId])
   @@index([spentAt])
   @@map("expenses")
 }
 
-enum DepositStatus {
-  PENDING
-  CONFIRMED
-}
-
 model CashDeposit {
   id            Int           @id @default(autoincrement())
+  businessId    Int?          @map("business_id")
+  outletId      Int?          @map("outlet_id")
   cashierId     Int           @map("cashier_id")
   amount        Int
   note          String?
@@ -332,9 +433,13 @@ model CashDeposit {
   confirmedAt   DateTime?     @map("confirmed_at")
   confirmedById Int?          @map("confirmed_by_id")
 
-  cashier     User  @relation("DepositCashier", fields: [cashierId], references: [id])
-  confirmedBy User? @relation("DepositConfirmer", fields: [confirmedById], references: [id])
+  business    Business? @relation(fields: [businessId], references: [id])
+  outlet      Outlet?   @relation(fields: [outletId], references: [id])
+  cashier     User      @relation("DepositCashier", fields: [cashierId], references: [id])
+  confirmedBy User?     @relation("DepositConfirmer", fields: [confirmedById], references: [id])
 
+  @@index([businessId])
+  @@index([outletId])
   @@index([cashierId])
   @@index([status])
   @@map("cash_deposits")
@@ -345,26 +450,4 @@ model AppSetting {
   value String
 
   @@map("app_settings")
-}
-
-enum PhotoKind {
-  RECEIVED
-  READY
-}
-
-model OrderPhoto {
-  id           Int       @id @default(autoincrement())
-  orderId      Int       @map("order_id")
-  kind         PhotoKind
-  filename     String
-  mimeType     String    @map("mime_type")
-  sizeBytes    Int       @map("size_bytes")
-  uploadedById Int       @map("uploaded_by_id")
-  createdAt    DateTime  @default(now()) @map("created_at")
-
-  order      Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  uploadedBy User  @relation(fields: [uploadedById], references: [id])
-
-  @@index([orderId])
-  @@map("order_photos")
 }
